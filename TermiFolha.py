@@ -42,12 +42,15 @@
 #
 # 20-05-2026
 
+import ast
 import copy
 import csv
 import json
 import logging
+import operator
 import os
 import pickle
+import re
 
 import fpdf as fpdf_lib
 import matplotlib
@@ -868,7 +871,8 @@ def record_checkpoint():
 
 
 def commit():
-    """Fecha uma alteração: grava o estado e regista o ponto de desfazer."""
+    """Fecha uma alteração: recalcula as fórmulas, grava o estado e regista o ponto de desfazer."""
+    recalculate_formulas()
     save_state()
     record_checkpoint()
 
@@ -1392,6 +1396,8 @@ def add_row():
         cancelled = False
 
         for col in table.columns:
+            if col in meta["formulas"]:
+                continue  # coluna calculada: é preenchida pela fórmula
             col_type = type_of(col)
             type_label = TYPE_NAME.get(col_type, "texto")
             while True:
@@ -1463,6 +1469,11 @@ def edit_cell():
         pause()
         return
 
+    if col in meta["formulas"]:
+        print(f"{UI_INDENT_1}'{col}' é uma coluna calculada ({meta['formulas'][col]}). Converta-a em valores para a poder editar.")
+        pause()
+        return
+
     col_type = type_of(col)
     current = table.at[idx, col]
     print(f"{UI_INDENT_1}Valor atual: {format_value(current)}")
@@ -1518,6 +1529,189 @@ def remove_row():
     commit()
     print(f"\n{UI_INDENT_1}Linha {idx} removida.")
     pause()
+
+
+# Fórmulas: avaliador próprio sobre a árvore sintáctica (ast). Nunca usa eval/exec: só os nós e funções listados abaixo são aceites,
+# por isso uma fórmula vinda de um ficheiro de estado adulterado não consegue executar código.
+class FormulaError(ValueError):
+    """Fórmula inválida (sintaxe, nome desconhecido ou operação não permitida)."""
+
+
+_FORMULA_MAX_LENGTH = 500
+_FORMULA_MAX_NODES = 200
+_FORMULA_BINARY = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv, ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow}
+_FORMULA_COMPARE = {ast.Eq: operator.eq, ast.NotEq: operator.ne, ast.Lt: operator.lt, ast.LtE: operator.le, ast.Gt: operator.gt, ast.GtE: operator.ge}
+_FORMULA_NODES = (
+    ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call, ast.Name, ast.Constant, ast.Load,
+    ast.And, ast.Or, ast.Not, ast.USub, ast.UAdd, *_FORMULA_BINARY, *_FORMULA_COMPARE,
+)
+_FORMULA_ARITY = {  # nome -> (mínimo, máximo) de argumentos
+    "abs": (1, 1), "round": (1, 2), "sqrt": (1, 1), "log": (1, 1), "exp": (1, 1), "floor": (1, 1), "ceil": (1, 1),
+    "min": (2, 2), "max": (2, 2), "se": (3, 3), "year": (1, 1), "month": (1, 1), "day": (1, 1), "days": (2, 2),
+}
+_FORMULA_FLOAT_FUNCTIONS = {"sqrt", "log", "exp"}  # produzem sempre decimais
+
+
+def _parse_formula(expression, columns):
+    """Valida `expression` e devolve (árvore, {nome no texto: coluna}, colunas referidas). Levanta FormulaError."""
+    text = expression.strip()
+    if not text:
+        raise FormulaError("a fórmula está vazia")
+    if len(text) > _FORMULA_MAX_LENGTH:
+        raise FormulaError(f"a fórmula tem mais de {_FORMULA_MAX_LENGTH} caracteres")
+
+    names = {}
+
+    def bracket(match):  # [Nome com espaços] -> identificador seguro
+        column = resolve_column(match.group(1).strip(), source=columns)
+        if column is None:
+            raise FormulaError(f"coluna inexistente: [{match.group(1).strip()}]")
+        key = f"__col{len(names)}__"
+        names[key] = column
+        return key
+
+    text = re.sub(r"\[([^\[\]]+)\]", bracket, text)
+    try:
+        tree = ast.parse(text, mode="eval")
+    except SyntaxError:
+        raise FormulaError("sintaxe inválida") from None
+    nodes = list(ast.walk(tree))
+    if len(nodes) > _FORMULA_MAX_NODES:
+        raise FormulaError("fórmula demasiado complexa")
+
+    call_names = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+    for node in nodes:
+        if not isinstance(node, _FORMULA_NODES):
+            raise FormulaError(f"expressão não permitida ({type(node).__name__})")
+        if isinstance(node, ast.Constant) and (isinstance(node.value, bool) or not isinstance(node.value, (int, float, str))):
+            raise FormulaError("só são aceites números e texto")
+        if isinstance(node, ast.Compare) and len(node.ops) != 1:
+            raise FormulaError("comparações encadeadas não são suportadas")
+        if isinstance(node, ast.Call):
+            func = node.func
+            if not isinstance(func, ast.Name) or func.id.lower() not in _FORMULA_ARITY or node.keywords:
+                raise FormulaError("função desconhecida ou chamada inválida")
+            low, high = _FORMULA_ARITY[func.id.lower()]
+            if not low <= len(node.args) <= high:
+                raise FormulaError(f"'{func.id}' espera entre {low} e {high} argumento(s)")
+        elif isinstance(node, ast.Name) and id(node) not in call_names and node.id not in names:
+            column = resolve_column(node.id, source=columns)
+            if column is None:
+                raise FormulaError(f"coluna ou função desconhecida: '{node.id}'")
+            names[node.id] = column
+    referenced = {names[n.id] for n in nodes if isinstance(n, ast.Name) and id(n) not in call_names}
+    return tree, names, referenced
+
+
+def _formula_operand(data, col, types):
+    """Coluna pronta a calcular: números como float64 (vazios = NaN), datas como datetime, texto como object."""
+    col_type = types.get(col, str)
+    if col_type in (int, float):
+        return pd.to_numeric(data[col], errors="coerce").astype("float64")
+    if col_type == DATE_TYPE:
+        return pd.to_datetime(data[col], errors="coerce")
+    return data[col].astype(object)
+
+
+def _formula_function(name, args, index):
+    """Aplica a função `name` (já validada) a `args`; devolve Series/escalar."""
+    def as_series(value):
+        return value if isinstance(value, pd.Series) else pd.Series(value, index=index)
+
+    if name == "round":
+        decimals = int(args[1]) if len(args) > 1 else 0
+        return as_series(args[0]).round(decimals)
+    if name == "se":
+        condition = as_series(args[0])
+        mask = condition.fillna(False).astype(bool) if condition.dtype != object else condition.eq(True)
+        return pd.Series(np.where(mask, as_series(args[1]), as_series(args[2])), index=index)
+    if name in ("year", "month", "day"):
+        values = pd.to_datetime(as_series(args[0]), errors="coerce")
+        return getattr(values.dt, name).astype("float64")
+    if name == "days":
+        return (pd.to_datetime(as_series(args[0]), errors="coerce") - pd.to_datetime(as_series(args[1]), errors="coerce")).dt.days.astype("float64")
+    functions = {"abs": np.abs, "sqrt": np.sqrt, "log": np.log, "exp": np.exp, "floor": np.floor, "ceil": np.ceil, "min": np.minimum, "max": np.maximum}
+    result = functions[name](*[as_series(a) if isinstance(a, pd.Series) else a for a in args])
+    return as_series(result)
+
+
+def evaluate_formula(expression, data, types):
+    """Avalia `expression` sobre `data`. Devolve (Series, tipo da coluna: int/float/str/DATE_TYPE). Levanta FormulaError."""
+    tree, names, referenced = _parse_formula(expression, list(data.columns))
+    operands = {key: _formula_operand(data, col, types) for key, col in names.items()}
+
+    def value_of(node):
+        if isinstance(node, ast.Constant):
+            return np.float64(node.value) if isinstance(node.value, (int, float)) else node.value  # float: evita potências gigantes em inteiros Python
+        if isinstance(node, ast.Name):
+            return operands[node.id]
+        if isinstance(node, ast.BinOp):
+            return _FORMULA_BINARY[type(node.op)](value_of(node.left), value_of(node.right))
+        if isinstance(node, ast.UnaryOp):
+            operand = value_of(node.operand)
+            return {ast.USub: operator.neg, ast.UAdd: operator.pos, ast.Not: operator.invert}[type(node.op)](operand)
+        if isinstance(node, ast.Compare):
+            return _FORMULA_COMPARE[type(node.ops[0])](value_of(node.left), value_of(node.comparators[0]))
+        if isinstance(node, ast.BoolOp):
+            combine = operator.and_ if isinstance(node.op, ast.And) else operator.or_
+            result = value_of(node.values[0])
+            for other in node.values[1:]:
+                result = combine(result, value_of(other))
+            return result
+        return _formula_function(node.func.id.lower(), [value_of(a) for a in node.args], data.index)  # ast.Call
+
+    try:
+        with np.errstate(all="ignore"):
+            value = value_of(tree.body)
+            series = value if isinstance(value, pd.Series) else pd.Series(value, index=data.index)
+            series = series.replace([np.inf, -np.inf], np.nan) if pd.api.types.is_float_dtype(series) else series
+    except FormulaError:
+        raise
+    except Exception as e:
+        raise FormulaError(f"operação inválida ({e})") from None
+
+    uses_division = any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for n in ast.walk(tree))
+    uses_float_function = any(isinstance(n, ast.Call) and n.func.id.lower() in _FORMULA_FLOAT_FUNCTIONS for n in ast.walk(tree))
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series, DATE_TYPE
+    if pd.api.types.is_bool_dtype(series):
+        return series.astype("int64"), int
+    if pd.api.types.is_numeric_dtype(series):
+        present = series.dropna()
+        integral = bool((present % 1 == 0).all())
+        all_int_inputs = bool(referenced) and all(types.get(c) in (int, DATE_TYPE) for c in referenced)  # year/month/day/days de datas dão inteiros
+        return series.astype("float64"), (int if integral and all_int_inputs and not uses_division and not uses_float_function else float)
+    return series.astype(object), str
+
+
+def formula_references(expression):
+    """Colunas da folha activa que `expression` referencia (vazio se for inválida)."""
+    try:
+        return _parse_formula(expression, list(table.columns))[2]
+    except FormulaError:
+        return set()
+
+
+def formula_users(col):
+    """Colunas calculadas cuja fórmula usa `col`."""
+    return [c for c, expression in meta["formulas"].items() if c != col and col in formula_references(expression)]
+
+
+def recalculate_formulas():
+    """Recalcula as colunas calculadas da folha activa, pela ordem de criação. Uma fórmula que falhe deixa a coluna em branco e avisa."""
+    for col, expression in list(meta["formulas"].items()):
+        if col not in table.columns:
+            continue
+        try:
+            series, col_type = evaluate_formula(expression, table, col_types)
+        except FormulaError as e:
+            log.warning("Fórmula de %r falhou: %s", col, e)
+            print(f"{UI_INDENT_1}Aviso: a fórmula de '{col}' falhou ({e}); a coluna fica em branco.")
+            series, col_type = pd.Series(np.nan, index=table.index, dtype="float64"), float
+        table[col] = series
+        col_types[col] = col_type
+    if meta["formulas"]:
+        apply_types()
 
 
 # Operações sobre colunas: adicionar, remover, renomear
@@ -1608,6 +1802,12 @@ def remove_column():
         pause()
         return
 
+    users = formula_users(name)
+    if users:
+        print(f"{UI_INDENT_1}'{name}' é usada pela fórmula de: {', '.join(users)}. Converta essas colunas em valores primeiro.")
+        pause()
+        return
+
     if not confirm(f"Confirma remover coluna '{name}'?"):
         print(f"\n{UI_INDENT_1}Operação cancelada.")
         pause()
@@ -1635,6 +1835,12 @@ def rename_column():
 
     if name is None:
         print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
+        return
+
+    users = formula_users(name)
+    if users:
+        print(f"{UI_INDENT_1}'{name}' é usada pela fórmula de: {', '.join(users)}. Converta essas colunas em valores primeiro.")
         pause()
         return
 
@@ -2631,6 +2837,84 @@ def menu_charts():
             plot_polynomial_trend()
 
 
+# Colunas calculadas (fórmulas)
+FORMULA_HELP = (
+    "Operadores: + - * / // % **   comparações: == != < <= > >=   lógica: and or not",
+    "Colunas: escreva o nome (Salario) ou entre parênteses rectos se tiver espaços ([Preço unitário])",
+    "Funções: abs round(x, casas) sqrt log exp floor ceil min(a,b) max(a,b) se(condição, então, senão)",
+    "Datas:   year(d) month(d) day(d) days(d1, d2)   Exemplos: Preco * Qtd   se(Idade >= 18, 1, 0)   round(Salario / 12, 2)",
+)
+
+
+def add_formula_column():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    header("COLUNA CALCULADA (FÓRMULA)")
+    print()
+    for line in FORMULA_HELP:
+        print(f"{UI_INDENT_1}{line}")
+    if meta["formulas"]:
+        print(f"\n{UI_INDENT_1}Fórmulas existentes:")
+        for col, expression in meta["formulas"].items():
+            print(f"{UI_INDENT_2}{col} = {expression}")
+    print()
+    name = input(f"{UI_INDENT_1}Nome da nova coluna ('sair' cancela): ").strip()
+    if not name or name.lower() == "sair":
+        return
+    if resolve_column(name) is not None:
+        print(f"{UI_INDENT_1}Coluna '{name}' já existe.")
+        pause()
+        return
+    while True:
+        expression = input(f"{UI_INDENT_1}{name} = ").strip()
+        if not expression or expression.lower() == "sair":
+            return
+        try:
+            series, col_type = evaluate_formula(expression, table, col_types)
+            break
+        except FormulaError as e:
+            print(f"{UI_INDENT_1}Fórmula inválida: {e}")
+
+    table[name] = series
+    col_types[name] = col_type
+    meta["formulas"][name] = expression
+    commit()
+    print(f"\n{UI_INDENT_1}Coluna '{name}' ({TYPE_NAME.get(col_type, 'texto')}) calculada. É recalculada sempre que a folha muda.")
+    pause()
+
+
+def freeze_formula():
+    if not meta["formulas"]:
+        print(f"{UI_INDENT_1}Não há colunas calculadas.")
+        pause()
+        return
+    header("CONVERTER FÓRMULA EM VALORES")
+    print()
+    for col, expression in meta["formulas"].items():
+        print(f"{UI_INDENT_2}{col} = {expression}")
+    value = input(f"\n{UI_INDENT_1}Coluna ('sair' cancela): ").strip()
+    if not value or value.lower() == "sair":
+        return
+    col = resolve_column(value, source=list(meta["formulas"]))
+    if col is None:
+        print(f"{UI_INDENT_1}Essa coluna não tem fórmula.")
+        pause()
+        return
+    users = formula_users(col)
+    if users:
+        print(f"{UI_INDENT_1}'{col}' é usada pela fórmula de: {', '.join(users)}. Converta essas primeiro.")
+        pause()
+        return
+    if not confirm(f"Converter '{col}' em valores fixos (deixa de ser recalculada)?"):
+        return
+    del meta["formulas"][col]
+    commit()
+    print(f"\n{UI_INDENT_1}'{col}' é agora uma coluna normal.")
+    pause()
+
+
 # Apresentação: formatos, colunas visíveis, páginas e linha de totais
 def format_column():
     if table.columns.empty:
@@ -2812,10 +3096,12 @@ def menu_columns():
         print(f"{UI_INDENT_1}[3] Renomear coluna")
         print(f"{UI_INDENT_1}[4] Formatação de valores (casas decimais, milhares, €)")
         print(f"{UI_INDENT_1}[5] Colunas visíveis (escolher e ordenar)")
+        print(f"{UI_INDENT_1}[6] Coluna calculada (fórmula)")
+        print(f"{UI_INDENT_1}[7] Converter fórmula em valores")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -2828,6 +3114,10 @@ def menu_columns():
             format_column()
         elif choice == "5":
             choose_visible_columns()
+        elif choice == "6":
+            add_formula_column()
+        elif choice == "7":
+            freeze_formula()
 
 
 def menu_basic_analysis():
