@@ -602,6 +602,7 @@ def importar():
     except FileNotFoundError:
         print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
     except Exception as e:
+        log.exception("Falha em importar")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -700,6 +701,7 @@ def importar_csv():
     except FileNotFoundError:
         print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
     except Exception as e:
+        log.exception("Falha em importar_csv")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -723,6 +725,7 @@ def exportar_csv():
         tabela.to_csv(nome, index=False, encoding="utf-8-sig", date_format="%d/%m/%Y")
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
+        log.exception("Falha em exportar_csv")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -777,6 +780,7 @@ def exportar_word():
         doc.save(nome)
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
+        log.exception("Falha em exportar_word")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -874,6 +878,7 @@ def exportar_pdf():
         pdf.output(nome)
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
+        log.exception("Falha em exportar_pdf")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -897,6 +902,7 @@ def exportar():
         tabela.to_excel(nome, index=False)
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
+        log.exception("Falha em exportar")
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
 
@@ -2335,9 +2341,22 @@ def sobre():
 
 
 # Ponto de entrada: menu principal e ciclo da aplicação
+def configurar_log():
+    """Regista erros em .termifolha.log (rotativo). Chamado só em main(): importar o módulo não cria ficheiros."""
+    from logging.handlers import RotatingFileHandler
+    try:
+        handler = RotatingFileHandler(FICHEIRO_LOG, maxBytes=256 * 1024, backupCount=1, encoding="utf-8")
+    except OSError:
+        return  # sem permissões de escrita: a aplicação funciona na mesma, sem registo
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    log.addHandler(handler)
+    log.setLevel(logging.INFO)
+
+
 def main():
     global tabela, tipos
 
+    configurar_log()
     carregar_estado()
 
     if not undo:
