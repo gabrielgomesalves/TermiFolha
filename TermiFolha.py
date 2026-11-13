@@ -1093,6 +1093,10 @@ def filtro_texto(col):
     print()
     print(f"{UI_INDENTACAO_1}Operador: [1] Contém  [2] Igual a  [3] Começa com  [4] Termina com")
     op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    if op not in ("1", "2", "3", "4"):
+        print(f"{UI_INDENTACAO_1}Operador inválido.")
+        pausar()
+        return None
     termo = input(f"{UI_INDENTACAO_1}Termo: ").strip()
     serie = tabela[col].astype(str)
     termo_lower = termo.lower()
@@ -1102,7 +1106,7 @@ def filtro_texto(col):
         return tabela[serie.str.lower().str.startswith(termo_lower, na=False)]
     elif op == "4":
         return tabela[serie.str.lower().str.endswith(termo_lower, na=False)]
-    return tabela[serie.str.contains(termo, case=False, na=False)]
+    return tabela[serie.str.contains(termo, case=False, na=False, regex=False)]
 
 
 def filtrar():
