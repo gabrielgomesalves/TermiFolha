@@ -1,0 +1,13 @@
+# Estado e exportações geradas em tempo de execução
+.termifolha_estado.pkl
+*.xlsx
+*.docx
+/*.pdf
+!Manual do Utilizador*.pdf
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.venv/
