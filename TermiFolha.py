@@ -42,15 +42,19 @@
 #
 # 20-05-2026
 
+import argparse
 import ast
 import copy
 import csv
+import html
+import io
 import json
 import logging
 import operator
 import os
 import pickle
 import re
+import sys
 import time
 
 import fpdf as fpdf_lib
@@ -68,6 +72,7 @@ APP_VERSION        = "1.2"
 APP_AUTHOR         = "Gabriel Gomes Alves"
 _PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")
+STATE_ENABLED = True  # False no modo não interactivo: a sessão guardada não é lida nem escrita
 LEGACY_STATE_FILE = os.path.join(_PROGRAM_DIR, ".termifolha_estado.pkl")  # formato antigo, só lido para migrar
 LOG_FILE      = os.path.join(_PROGRAM_DIR, ".termifolha.log")
 EXT_EXCEL         = ".xlsx"
@@ -653,6 +658,8 @@ def _write_state_file(path):
 
 def save_state():
     """Grava o estado de forma atómica. Devolve True se gravou, False se falhou (e avisa o utilizador)."""
+    if not STATE_ENABLED:
+        return True
     try:
         _write_state_file(STATE_FILE)
         return True
@@ -1029,26 +1036,52 @@ def adopt_workbook(frames, detect_dates=False, ask_integers=False):
     commit()
 
 
+DATE_INPUT_FORMATS = ("%d/%m/%Y", "%Y-%m-%d")  # DD/MM/AAAA (a da aplicação) e ISO (habitual em JSON)
+
+
 def _as_dates(series):
-    """Converte uma coluna de texto em datas se TODOS os valores forem DD/MM/AAAA; senão None."""
+    """Converte uma coluna de texto em datas se TODOS os valores forem DD/MM/AAAA (ou AAAA-MM-DD); senão None."""
     valid_values = series.dropna()
     if valid_values.empty:
         return None
+    for date_format in DATE_INPUT_FORMATS:
+        try:
+            pd.to_datetime(valid_values, format=date_format)
+        except (ValueError, TypeError):
+            continue
+        return pd.to_datetime(series, format=date_format, errors="coerce")
+    return None
+
+
+def _separator_of(sample):
+    """Detecta o separador entre os mais comuns; ',' se não for possível (ex.: uma só coluna)."""
     try:
-        pd.to_datetime(valid_values, format="%d/%m/%Y")
-    except (ValueError, TypeError):
-        return None
-    return pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
+        return csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return ","
 
 
 def _csv_separator(name, file_encoding):
-    """Detecta o separador entre os mais comuns; ',' se não for possível (ex.: uma só coluna)."""
     with open(name, encoding=file_encoding, newline="") as f:
-        random_sample = f.read(8192)
+        return _separator_of(f.read(8192))
+
+
+def _infer_columns(raw):
+    """Inferência de tipos a partir do texto cru de cada coluna (ver _numeric_or_text)."""
+    for col in raw.columns:
+        raw[col] = _numeric_or_text(raw[col])
+    return raw
+
+
+def parse_csv_text(text):
+    """Texto CSV/TSV (por exemplo copiado do Excel) -> DataFrame com os tipos inferidos. Levanta ValueError se não houver dados."""
+    if not text.strip():
+        raise ValueError("não há dados")
     try:
-        return csv.Sniffer().sniff(random_sample, delimiters=",;\t|").delimiter
-    except csv.Error:
-        return ","
+        raw = pd.read_csv(io.StringIO(text), sep=_separator_of(text[:8192]), dtype=str)
+    except pd.errors.EmptyDataError:
+        raise ValueError("não há dados") from None
+    return _infer_columns(raw)
 
 
 def _numeric_or_text(series):
@@ -1081,9 +1114,7 @@ def _read_csv(name):
             continue
         except pd.errors.EmptyDataError:
             raise ValueError("o ficheiro está vazio") from None
-        for col in raw.columns:
-            raw[col] = _numeric_or_text(raw[col])
-        return raw
+        return _infer_columns(raw)
     raise ValueError("não foi possível descodificar o ficheiro (esperado UTF-8 ou Latin-1)")
 
 
@@ -1110,6 +1141,13 @@ def import_csv():
     pause()
 
 
+def write_csv(path, style="intl"):
+    """Grava a folha activa em CSV: "intl" (',' e '.') ou "pt" (';' e ',', como o Excel português)."""
+    sep, decimal = (";", ",") if style == "pt" else (",", ".")
+    # utf-8-sig: o Excel reconhece os acentos; datas em DD/MM/AAAA, como na aplicação.
+    table.to_csv(path, index=False, sep=sep, decimal=decimal, encoding="utf-8-sig", date_format="%d/%m/%Y")
+
+
 def export_csv():
     if table.columns.empty:
         print(f"{UI_INDENT_1}Sem dados para exportar.")
@@ -1125,16 +1163,51 @@ def export_csv():
         name += EXT_CSV
 
     print(f"{UI_INDENT_1}Formato: [1] Internacional (',' e '.')  [2] Excel português (';' e ',')")
-    sep, decimal = (";", ",") if input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() == "2" else (",", ".")
+    style = "pt" if input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() == "2" else "intl"
 
     try:
-        # utf-8-sig: o Excel reconhece os acentos; datas em DD/MM/AAAA, como na aplicação.
-        table.to_csv(name, index=False, sep=sep, decimal=decimal, encoding="utf-8-sig", date_format="%d/%m/%Y")
+        write_csv(name, style)
         print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
         log.exception("Falha em export_csv")
         print(f"\n{UI_INDENT_1}Erro: {e}")
     pause()
+
+
+def write_word(path):
+    doc = Document()
+    doc.add_heading(f"{APP_NAME} — Relatório", 0)
+    doc.add_paragraph(f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
+
+    doc.add_heading("Colunas e tipos", level=1)
+    for col in table.columns:
+        doc.add_paragraph(f"• {col}: {TYPE_NAME.get(type_of(col), 'texto')}")
+
+    if not table.empty:
+        doc.add_heading("Dados", level=1)
+        cols = list(table.columns)
+        tbl = doc.add_table(rows=1 + len(table), cols=len(cols))
+        tbl.style = "Table Grid"
+        for j, col in enumerate(cols):
+            tbl.rows[0].cells[j].text = str(col)
+        for i, (_, row) in enumerate(table.iterrows()):
+            for j, col in enumerate(cols):
+                tbl.rows[i + 1].cells[j].text = format_value(row[col])
+
+    num_cols = table.select_dtypes(include="number").columns.tolist()
+    if num_cols:
+        doc.add_heading("Estatísticas básicas (colunas numéricas)", level=1)
+        for col in num_cols:
+            series = table[col].dropna()
+            doc.add_paragraph(
+                f"{col}:  média={format_number(series.mean())}  "
+                f"mín={format_number(series.min())}  "
+                f"máx={format_number(series.max())}  "
+                f"desvio={format_number(series.std())}  "
+                f"mediana={format_number(series.median())}"
+            )
+
+    doc.save(path)
 
 
 def export_word():
@@ -1152,39 +1225,7 @@ def export_word():
         name += EXT_WORD
 
     try:
-        doc = Document()
-        doc.add_heading(f"{APP_NAME} — Relatório", 0)
-        doc.add_paragraph(f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
-
-        doc.add_heading("Colunas e tipos", level=1)
-        for col in table.columns:
-            doc.add_paragraph(f"• {col}: {TYPE_NAME.get(type_of(col), 'texto')}")
-
-        if not table.empty:
-            doc.add_heading("Dados", level=1)
-            cols = list(table.columns)
-            tbl = doc.add_table(rows=1 + len(table), cols=len(cols))
-            tbl.style = "Table Grid"
-            for j, col in enumerate(cols):
-                tbl.rows[0].cells[j].text = str(col)
-            for i, (_, row) in enumerate(table.iterrows()):
-                for j, col in enumerate(cols):
-                    tbl.rows[i + 1].cells[j].text = format_value(row[col])
-
-        num_cols = table.select_dtypes(include="number").columns.tolist()
-        if num_cols:
-            doc.add_heading("Estatísticas básicas (colunas numéricas)", level=1)
-            for col in num_cols:
-                series = table[col].dropna()
-                doc.add_paragraph(
-                    f"{col}:  média={format_number(series.mean())}  "
-                    f"mín={format_number(series.min())}  "
-                    f"máx={format_number(series.max())}  "
-                    f"desvio={format_number(series.std())}  "
-                    f"mediana={format_number(series.median())}"
-                )
-
-        doc.save(name)
+        write_word(name)
         print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
         log.exception("Falha em export_word")
@@ -1227,6 +1268,75 @@ def _pdf_line(pdf, height, text, align=""):
     pdf.ln(height)
 
 
+def write_pdf(path):
+    pdf = FPDF()
+    font_family = _configure_pdf_font(pdf)
+    pdf.add_page()
+
+    # Título
+    pdf.set_font(font_family, "B", 16)
+    pdf.set_text_color(16, 41, 230)
+    _pdf_line(pdf, 10, f"{APP_NAME} - Relatório", align="C")
+
+    # Dimensões
+    pdf.set_font(font_family, size=11)
+    pdf.set_text_color(0, 0, 0)
+    _pdf_line(pdf, 8, f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
+
+    # Colunas e tipos
+    pdf.ln(3)
+    pdf.set_font(font_family, "B", 12)
+    pdf.set_text_color(14, 122, 230)
+    _pdf_line(pdf, 8, "Colunas e tipos")
+    pdf.set_font(font_family, size=10)
+    pdf.set_text_color(0, 0, 0)
+    for col in table.columns:
+        type_label = TYPE_NAME.get(type_of(col), "texto")
+        _pdf_line(pdf, 7, f"  {col}: {type_label}")
+
+    # Dados
+    if not table.empty:
+        pdf.ln(3)
+        pdf.set_font(font_family, "B", 12)
+        pdf.set_text_color(14, 122, 230)
+        _pdf_line(pdf, 8, "Dados")
+        pdf.set_text_color(0, 0, 0)
+
+        cols = list(table.columns)
+        col_w = min(35, (pdf.w - 20) / len(cols))
+        pdf.set_font(font_family, "B", 8)
+        for col in cols:
+            pdf.cell(col_w, 7, _pdf_text(pdf, str(col)[:14]), border=1)
+        pdf.ln()
+        pdf.set_font(font_family, size=8)
+        for _, row in table.iterrows():
+            for col in cols:
+                pdf.cell(col_w, 6, _pdf_text(pdf, str(format_value(row[col]))[:14]), border=1)
+            pdf.ln()
+
+    # Estatísticas
+    num_cols = table.select_dtypes(include="number").columns.tolist()
+    if num_cols:
+        pdf.ln(3)
+        pdf.set_font(font_family, "B", 12)
+        pdf.set_text_color(14, 122, 230)
+        _pdf_line(pdf, 8, "Estatísticas básicas (colunas numéricas)")
+        pdf.set_font(font_family, size=10)
+        pdf.set_text_color(0, 0, 0)
+        for col in num_cols:
+            series = table[col].dropna()
+            line = (
+                f"{col}: média={format_number(series.mean())}  "
+                f"mín={format_number(series.min())}  "
+                f"máx={format_number(series.max())}  "
+                f"desvio={format_number(series.std())}  "
+                f"mediana={format_number(series.median())}"
+            )
+            _pdf_line(pdf, 7, line)
+
+    pdf.output(path)
+
+
 def export_pdf():
     if table.columns.empty:
         print(f"{UI_INDENT_1}Sem dados para exportar.")
@@ -1242,72 +1352,7 @@ def export_pdf():
         name += EXT_PDF
 
     try:
-        pdf = FPDF()
-        font_family = _configure_pdf_font(pdf)
-        pdf.add_page()
-
-        # Título
-        pdf.set_font(font_family, "B", 16)
-        pdf.set_text_color(16, 41, 230)
-        _pdf_line(pdf, 10, f"{APP_NAME} - Relatório", align="C")
-
-        # Dimensões
-        pdf.set_font(font_family, size=11)
-        pdf.set_text_color(0, 0, 0)
-        _pdf_line(pdf, 8, f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
-
-        # Colunas e tipos
-        pdf.ln(3)
-        pdf.set_font(font_family, "B", 12)
-        pdf.set_text_color(14, 122, 230)
-        _pdf_line(pdf, 8, "Colunas e tipos")
-        pdf.set_font(font_family, size=10)
-        pdf.set_text_color(0, 0, 0)
-        for col in table.columns:
-            type_label = TYPE_NAME.get(type_of(col), "texto")
-            _pdf_line(pdf, 7, f"  {col}: {type_label}")
-
-        # Dados
-        if not table.empty:
-            pdf.ln(3)
-            pdf.set_font(font_family, "B", 12)
-            pdf.set_text_color(14, 122, 230)
-            _pdf_line(pdf, 8, "Dados")
-            pdf.set_text_color(0, 0, 0)
-
-            cols = list(table.columns)
-            col_w = min(35, (pdf.w - 20) / len(cols))
-            pdf.set_font(font_family, "B", 8)
-            for col in cols:
-                pdf.cell(col_w, 7, _pdf_text(pdf, str(col)[:14]), border=1)
-            pdf.ln()
-            pdf.set_font(font_family, size=8)
-            for _, row in table.iterrows():
-                for col in cols:
-                    pdf.cell(col_w, 6, _pdf_text(pdf, str(format_value(row[col]))[:14]), border=1)
-                pdf.ln()
-
-        # Estatísticas
-        num_cols = table.select_dtypes(include="number").columns.tolist()
-        if num_cols:
-            pdf.ln(3)
-            pdf.set_font(font_family, "B", 12)
-            pdf.set_text_color(14, 122, 230)
-            _pdf_line(pdf, 8, "Estatísticas básicas (colunas numéricas)")
-            pdf.set_font(font_family, size=10)
-            pdf.set_text_color(0, 0, 0)
-            for col in num_cols:
-                series = table[col].dropna()
-                line = (
-                    f"{col}: média={format_number(series.mean())}  "
-                    f"mín={format_number(series.min())}  "
-                    f"máx={format_number(series.max())}  "
-                    f"desvio={format_number(series.std())}  "
-                    f"mediana={format_number(series.median())}"
-                )
-                _pdf_line(pdf, 7, line)
-
-        pdf.output(name)
+        write_pdf(name)
         print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
         log.exception("Falha em export_pdf")
@@ -1346,6 +1391,227 @@ def export_excel():
         print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
         log.exception("Falha em export_excel")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+# JSON, texto colado, Markdown, HTML e ficheiros de projecto
+PASTE_MAX_LINES = 100_000
+PASTE_END_WORD = "fim"
+
+
+def _json_cell(value):
+    """Valor JSON (escalar) -> valor de célula; estruturas aninhadas viram texto JSON."""
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
+
+
+def _column_from_json_values(values):
+    """Lista de valores JSON de uma coluna -> Series: inteiros (com nulos) em Int64, números em float, o resto em texto."""
+    present = [v for v in values if v is not None]
+    if present and all(isinstance(v, int) and not isinstance(v, bool) for v in present):
+        return pd.Series(pd.array(values, dtype="Int64"))
+    if present and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in present):
+        return pd.Series(values, dtype="float64")
+    return pd.Series([None if v is None else (v if isinstance(v, str) else _plain_text(v)) for v in values], dtype=object)
+
+
+def json_to_dataframe(data):
+    """Estrutura JSON -> DataFrame. Aceita uma lista de objectos (um por linha) ou um objecto de listas (uma por coluna).
+
+    Levanta ValueError se a estrutura não for suportada ou estiver vazia.
+    """
+    if isinstance(data, dict) and data and all(isinstance(v, list) for v in data.values()):
+        lengths = {len(v) for v in data.values()}
+        if len(lengths) != 1:
+            raise ValueError("as listas de cada coluna têm comprimentos diferentes")
+        columns = {str(k): [_json_cell(v) for v in values] for k, values in data.items()}
+    elif isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
+        names = list(dict.fromkeys(str(k) for r in data for k in r))
+        columns = {name: [_json_cell(r.get(name)) for r in data] for name in names}
+    else:
+        raise ValueError("estrutura JSON não suportada (esperava uma lista de objectos ou um objecto de listas) ou vazia")
+    if not columns or not any(columns.values()):
+        raise ValueError("o JSON não tem linhas")
+    return pd.DataFrame({name: _column_from_json_values(values) for name, values in columns.items()})
+
+
+def read_json_file(path):
+    with open(path, encoding="utf-8-sig") as f:
+        return json_to_dataframe(json.load(f))
+
+
+def _export_value(value):
+    """Valor de célula para JSON de exportação: em falta -> null, datas DD/MM/AAAA, números como tipos nativos."""
+    if pd.isna(value):
+        return None
+    if hasattr(value, "strftime"):
+        return value.strftime("%d/%m/%Y")
+    return value.item() if hasattr(value, "item") else value
+
+
+def write_json(path):
+    """Grava a folha activa como lista de objectos JSON (um por linha)."""
+    records = [{str(c): _export_value(v) for c, v in zip(table.columns, row, strict=True)} for row in table.itertuples(index=False, name=None)]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(records, f, ensure_ascii=False, indent=2)
+
+
+def _markdown_cell(text):
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\r", " ").replace("\n", " ")
+
+
+def write_markdown(path):
+    """Grava a folha activa como tabela Markdown (com os formatos de apresentação)."""
+    columns = list(table.columns)
+    numeric = [pd.api.types.is_numeric_dtype(table[c]) for c in columns]
+    lines = [f"# {_markdown_cell(active_name)}", "", f"{len(table)} linhas × {len(columns)} colunas", ""]
+    lines.append("| " + " | ".join(_markdown_cell(str(c)) for c in columns) + " |")
+    lines.append("| " + " | ".join("---:" if n else "---" for n in numeric) + " |")
+    for row in table.itertuples(index=False, name=None):
+        lines.append("| " + " | ".join(_markdown_cell(format_cell(c, v)) for c, v in zip(columns, row, strict=True)) + " |")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+_HTML_STYLE = (
+    "body{font-family:system-ui,sans-serif;margin:2rem}table{border-collapse:collapse}"
+    "th,td{border:1px solid #bbb;padding:.3rem .6rem}th{background:#f0f0f0;text-align:left}td.num{text-align:right}"
+)
+
+
+def write_html(path):
+    """Grava a folha activa como página HTML autónoma (todo o texto é escapado; sem scripts nem recursos externos)."""
+    columns = list(table.columns)
+    numeric = [pd.api.types.is_numeric_dtype(table[c]) for c in columns]
+    title = html.escape(active_name)
+    rows = ["<tr>" + "".join(f"<th>{html.escape(str(c))}</th>" for c in columns) + "</tr>"]
+    for row in table.itertuples(index=False, name=None):
+        cells = "".join(
+            f'<td class="num">{html.escape(format_cell(c, v))}</td>' if n else f"<td>{html.escape(format_cell(c, v))}</td>"
+            for c, v, n in zip(columns, row, numeric, strict=True)
+        )
+        rows.append(f"<tr>{cells}</tr>")
+    document = (
+        '<!doctype html>\n<html lang="pt">\n<head>\n<meta charset="utf-8">\n'
+        f"<title>{title}</title>\n<style>{_HTML_STYLE}</style>\n</head>\n<body>\n"
+        f"<h1>{title}</h1>\n<p>{len(table)} linhas × {len(columns)} colunas</p>\n<table>\n" + "\n".join(rows) + "\n</table>\n</body>\n</html>\n"
+    )
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(document)
+
+
+def _export_dialog(title, extension, writer):
+    """Diálogo comum de exportação: pede o nome, acrescenta a extensão e chama `writer(caminho)`."""
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem dados para exportar.")
+        pause()
+        return
+    header(title)
+    print()
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
+        return
+    if not name.lower().endswith(extension):
+        name += extension
+    try:
+        writer(name)
+        print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
+    except Exception as e:
+        log.exception("Falha em %s", title)
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+def export_json():
+    _export_dialog("EXPORTAR JSON", ".json", write_json)
+
+
+def export_markdown():
+    _export_dialog("EXPORTAR MARKDOWN", ".md", write_markdown)
+
+
+def export_html():
+    _export_dialog("EXPORTAR HTML", ".html", write_html)
+
+
+def import_json():
+    header("IMPORTAR JSON")
+    print()
+    if not confirm_replace_sheet():
+        return
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
+        return
+    if not name.lower().endswith(".json"):
+        name += ".json"
+    try:
+        adopt_dataframe(read_json_file(name), detect_dates=True)
+        print(f"\n{UI_INDENT_1}'{name}' importado: {len(table)} linhas, {len(table.columns)} colunas.")
+    except FileNotFoundError:
+        print(f"\n{UI_INDENT_1}Ficheiro '{name}' não encontrado.")
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"\n{UI_INDENT_1}JSON inválido: {e}")
+    except Exception as e:
+        log.exception("Falha em import_json")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+def import_pasted():
+    header("COLAR DADOS (CSV / EXCEL)")
+    print()
+    if not confirm_replace_sheet():
+        return
+    print(f"{UI_INDENT_1}Cole os dados (a primeira linha são os nomes das colunas; vale copiar do Excel).")
+    print(f"{UI_INDENT_1}Termine com uma linha vazia ou escrevendo '{PASTE_END_WORD}'. 'sair' cancela.\n")
+    lines = []
+    while len(lines) < PASTE_MAX_LINES:
+        line = input()
+        if line.strip().lower() == "sair":
+            return
+        if not line.strip() or line.strip().lower() == PASTE_END_WORD:
+            break
+        lines.append(line)
+    try:
+        adopt_dataframe(parse_csv_text("\n".join(lines)), detect_dates=True)
+        print(f"\n{UI_INDENT_1}Colados {len(table)} linhas e {len(table.columns)} colunas.")
+    except ValueError as e:
+        print(f"\n{UI_INDENT_1}Não foi possível importar: {e}.")
+    except Exception as e:
+        log.exception("Falha em import_pasted")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+def save_project():
+    _export_dialog("GUARDAR PROJECTO", EXT_PROJECT, _write_state_file)
+
+
+def open_project():
+    header("ABRIR PROJECTO")
+    print()
+    if not confirm_replace_sheet():
+        return
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
+        return
+    if not name.lower().endswith(EXT_PROJECT):
+        name += EXT_PROJECT
+    try:
+        sheet_list, active, _file_settings = _read_state_file(name)
+        _install_workbook(sheet_list, active, dict(settings))  # as definições são da instalação, não do projecto
+        commit()
+        print(f"\n{UI_INDENT_1}Projecto '{name}' aberto: {len(sheet_names())} folha(s).")
+    except FileNotFoundError:
+        print(f"\n{UI_INDENT_1}Ficheiro '{name}' não encontrado.")
+    except (ValueError, json.JSONDecodeError) as e:
+        print(f"\n{UI_INDENT_1}Projecto inválido: {e}")
+    except Exception as e:
+        log.exception("Falha em open_project")
         print(f"\n{UI_INDENT_1}Erro: {e}")
     pause()
 
@@ -4107,6 +4373,36 @@ def choose_totals():
     pause()
 
 
+# Definições da aplicação (guardadas no estado)
+def set_history_limit(steps):
+    """Define quantos passos de 'desfazer' se guardam (1 a HISTORY_LIMIT_MAX) e corta o histórico se já for maior."""
+    if not isinstance(steps, int) or isinstance(steps, bool) or not 1 <= steps <= HISTORY_LIMIT_MAX:
+        raise ValueError(f"o número de passos tem de estar entre 1 e {HISTORY_LIMIT_MAX}")
+    settings["history_limit"] = steps
+    del undo_stack[:max(0, len(undo_stack) - (steps + 1))]
+
+
+def menu_settings():
+    while True:
+        header("DEFINIÇÕES")
+        print(f"{UI_INDENT_1}[1] Passos de desfazer/refazer: {settings['history_limit']} (1-{HISTORY_LIMIT_MAX}; mais passos usam mais memória)")
+        print(f"{UI_INDENT_1}[2] Linhas por página em 'Ver por páginas': {settings['page_size']} (5-200)")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
+        choice = ask_option({"1", "2", "0"})
+        if choice == "0":
+            break
+        if choice == "1":
+            steps = ask_int_in_range(f"{UI_INDENT_1}Novo valor (Enter = manter): ", 1, HISTORY_LIMIT_MAX)
+            if steps is not None:
+                set_history_limit(steps)
+        else:
+            size = ask_int_in_range(f"{UI_INDENT_1}Novo valor (Enter = manter): ", 5, 200)
+            if size is not None:
+                settings["page_size"] = size
+        save_state()
+
+
 # Menus secundários: folha, linhas, colunas, análise básica e avançada
 def menu_sheet():
     while True:
@@ -4120,10 +4416,13 @@ def menu_sheet():
         print(f"{UI_INDENT_1}[7] Limpar folha (reset)")
         print(f"{UI_INDENT_1}[8] Importar CSV")
         print(f"{UI_INDENT_1}[9] Exportar CSV")
+        print(f"{UI_INDENT_1}[A] Importar JSON          [B] Colar dados (CSV / Excel)")
+        print(f"{UI_INDENT_1}[C] Exportar JSON          [D] Exportar Markdown     [E] Exportar HTML")
+        print(f"{UI_INDENT_1}[P] Guardar projecto       [O] Abrir projecto (todas as folhas)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "P", "O", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -4144,6 +4443,9 @@ def menu_sheet():
             import_csv()
         elif choice == "9":
             export_csv()
+        else:
+            {"A": import_json, "B": import_pasted, "C": export_json, "D": export_markdown, "E": export_html,
+             "P": save_project, "O": open_project}[choice]()
 
 
 def menu_rows():
@@ -4307,10 +4609,7 @@ def configure_log():
     log.setLevel(logging.INFO)
 
 
-def main():
-    global table, col_types
-
-    configure_log()
+def run_interactive():
     load_state()
 
     if not undo_stack:
@@ -4326,13 +4625,14 @@ def main():
         print(f"{UI_INDENT_1}[6] Análise Avançada (info, groupby, duplicados, missing)")
         print(f"{UI_INDENT_1}[7] Gráficos         (matplotlib + numpy)")
         print(f"{UI_INDENT_1}[8] Folhas           (separadores, juntar, empilhar)")
+        print(f"{UI_INDENT_1}[9] Definições       (passos de desfazer, linhas por página)")
         print(f"{UI_INDENT_1}[S] Sobre")
         print(f"{UI_INDENT_1}[U] Desfazer  [{len(undo_stack) - 1} passo(s)]")
         print(f"{UI_INDENT_1}[R] Refazer   [{len(redo_stack)} passo(s)]")
         print(f"{UI_INDENT_1}[Q] Sair")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "S", "U", "R", "Q"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "S", "U", "R", "Q"})
 
         if choice == "1":
             menu_sheet()
@@ -4350,6 +4650,8 @@ def main():
             menu_charts()
         elif choice == "8":
             menu_workbook()
+        elif choice == "9":
+            menu_settings()
         elif choice == "S":
             about()
         elif choice == "U":
@@ -4362,5 +4664,89 @@ def main():
             break
 
 
+_EXPORTERS = {
+    ".xlsx": lambda path, args: write_excel(path, args.todas_as_folhas),
+    ".csv": lambda path, args: write_csv(path, "pt" if args.csv_pt else "intl"),
+    ".json": lambda path, args: write_json(path),
+    ".md": lambda path, args: write_markdown(path),
+    ".html": lambda path, args: write_html(path),
+    ".docx": lambda path, args: write_word(path),
+    ".pdf": lambda path, args: write_pdf(path),
+}
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        prog="TermiFolha",
+        description="TermiFolha — folha de cálculo em linha de comando. Sem argumentos abre o menu interactivo; "
+                    "com --importar/--projecto/--exportar corre sem interacção (não lê nem grava o estado da sessão).",
+        epilog="Exemplo: python TermiFolha.py --importar vendas.csv --exportar vendas.xlsx --exportar relatorio.html",
+    )
+    parser.add_argument("--importar", metavar="FICHEIRO", help="importa um .xlsx, .csv ou .json para a folha activa (o Excel com várias folhas importa todas)")
+    parser.add_argument("--projecto", metavar="FICHEIRO", help=f"abre um ficheiro de projecto ({EXT_PROJECT}) com todas as folhas")
+    parser.add_argument("--exportar", metavar="FICHEIRO", action="append", default=[],
+                        help="exporta a folha activa; o formato vem da extensão (.xlsx .csv .json .md .html .docx .pdf); pode repetir-se")
+    parser.add_argument("--csv-pt", action="store_true", help="CSV no formato do Excel português (';' e ',')")
+    parser.add_argument("--todas-as-folhas", action="store_true", help="no .xlsx, grava todas as folhas (um separador cada)")
+    parser.add_argument("--versao", action="version", version=f"{APP_NAME} {APP_VERSION}")
+    return parser
+
+
+def load_file_non_interactive(path):
+    """Importa um ficheiro (por extensão) sem fazer perguntas. Levanta ValueError se o formato não for suportado."""
+    extension = os.path.splitext(path)[1].lower()
+    if extension == ".xlsx":
+        frames = pd.read_excel(path, sheet_name=None)
+        if len(frames) == 1:
+            adopt_dataframe(next(iter(frames.values())))
+        else:
+            adopt_workbook(frames)
+    elif extension == ".csv":
+        adopt_dataframe(_read_csv(path), detect_dates=True)
+    elif extension == ".json":
+        adopt_dataframe(read_json_file(path), detect_dates=True)
+    else:
+        raise ValueError(f"formato não suportado para importar: '{extension or path}' (use .xlsx, .csv ou .json)")
+
+
+def run_batch(args):
+    """Modo não interactivo: abre/importa, exporta e termina. Devolve o código de saída (0 = tudo bem)."""
+    global STATE_ENABLED
+    STATE_ENABLED = False  # não mexe no estado da sessão interactiva
+    unknown = [p for p in args.exportar if os.path.splitext(p)[1].lower() not in _EXPORTERS]
+    if unknown:
+        print(f"Erro: formato de exportação não suportado em {', '.join(unknown)} (use {' '.join(_EXPORTERS)}).", file=sys.stderr)
+        return 2
+    try:
+        if args.projecto:
+            sheet_list, active, _file_settings = _read_state_file(args.projecto)
+            _install_workbook(sheet_list, active, dict(settings))
+        if args.importar:
+            load_file_non_interactive(args.importar)
+        if args.exportar and table.columns.empty:
+            print("Erro: não há dados para exportar (indique --importar ou --projecto).", file=sys.stderr)
+            return 1
+        for path in args.exportar:
+            _EXPORTERS[os.path.splitext(path)[1].lower()](path, args)
+            print(f"Exportado para '{path}'.")
+    except FileNotFoundError as e:
+        print(f"Erro: ficheiro '{e.filename}' não encontrado.", file=sys.stderr)
+        return 1
+    except Exception as e:
+        log.exception("Falha no modo não interactivo")
+        print(f"Erro: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
+    configure_log()
+    if args.importar or args.projecto or args.exportar:
+        return run_batch(args)
+    run_interactive()
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
