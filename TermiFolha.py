@@ -41,6 +41,7 @@
 #
 # 20-05-2026
 
+import csv
 import os
 import pickle
 
@@ -57,6 +58,7 @@ VERSAO_APP        = "1.0"
 AUTOR_APP         = "Gabriel Gomes Alves"
 FICHEIRO_ESTADO   = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".termifolha_estado.pkl")
 EXT_EXCEL         = ".xlsx"
+EXT_CSV           = ".csv"
 EXT_WORD          = ".docx"
 EXT_PDF           = ".pdf"
 LARGURA           = 72
@@ -476,18 +478,131 @@ def importar():
         nome += EXT_EXCEL
 
     try:
-        tabela = pd.read_excel(nome)
-        # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
-        tabela.columns = [str(c) for c in tabela.columns]
-        tipos = {}
-        for col in tabela.columns:
-            tipos[col] = inferir_tipo(tabela[col])
-        aplicar_tipos()
-        guardar_estado()
-        registar_ponto()
+        adoptar_dataframe(pd.read_excel(nome))
         print(f"\n{UI_INDENTACAO_1}'{nome}' importado: {len(tabela)} linhas, {len(tabela.columns)} colunas.")
     except FileNotFoundError:
         print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
+    except Exception as e:
+        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
+    pausar()
+
+
+def adoptar_dataframe(df, detectar_datas=False):
+    """Torna `df` a folha activa (importação de Excel/CSV).
+
+    O estado global só é alterado no fim, por isso uma falha a meio não deixa
+    a folha actual meio substituída.
+    """
+    global tabela, tipos
+    df = df.copy()
+    # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
+    df.columns = [str(c) for c in df.columns]
+    if detectar_datas:
+        for col in df.columns:
+            if inferir_tipo(df[col]) is str:
+                datas = _como_datas(df[col])
+                if datas is not None:
+                    df[col] = datas
+    novos_tipos = {col: inferir_tipo(df[col]) for col in df.columns}
+    tabela, tipos = df, novos_tipos
+    aplicar_tipos()
+    guardar_estado()
+    registar_ponto()
+
+
+def _como_datas(serie):
+    """Converte uma coluna de texto em datas se TODOS os valores forem DD/MM/AAAA; senão None."""
+    validos = serie.dropna()
+    if validos.empty:
+        return None
+    try:
+        pd.to_datetime(validos, format="%d/%m/%Y")
+    except (ValueError, TypeError):
+        return None
+    return pd.to_datetime(serie, format="%d/%m/%Y", errors="coerce")
+
+
+def _separador_csv(nome, codificacao):
+    """Detecta o separador entre os mais comuns; ',' se não for possível (ex.: uma só coluna)."""
+    with open(nome, encoding=codificacao, newline="") as f:
+        amostra = f.read(8192)
+    try:
+        return csv.Sniffer().sniff(amostra, delimiters=",;\t|").delimiter
+    except csv.Error:
+        return ","
+
+
+def _numerica_ou_texto(serie):
+    """Inferência a partir do texto cru: inteiros (com falhas) -> Int64, decimais -> float64, resto -> texto.
+
+    Códigos com zeros à esquerda (ex.: 007) ficam como texto para não perder os zeros.
+    """
+    serie = serie.str.strip()
+    validos = serie.dropna()
+    if validos.empty or validos.str.contains(r"^[+-]?0\d").any():
+        return serie
+    if validos.str.fullmatch(r"[+-]?\d+").all():
+        return pd.to_numeric(serie).astype("Int64")
+    convertida = pd.to_numeric(serie, errors="coerce")
+    if convertida[serie.notna()].notna().all():
+        return convertida
+    return serie
+
+
+def _ler_csv(nome):
+    """Lê um CSV (UTF-8 ou Latin-1, separador detectado) e infere os tipos das colunas."""
+    for codificacao in ("utf-8-sig", "latin-1"):
+        try:
+            sep = _separador_csv(nome, codificacao)
+            cru = pd.read_csv(nome, sep=sep, encoding=codificacao, dtype=str)
+        except UnicodeDecodeError:
+            continue
+        except pd.errors.EmptyDataError:
+            raise ValueError("o ficheiro está vazio") from None
+        for col in cru.columns:
+            cru[col] = _numerica_ou_texto(cru[col])
+        return cru
+    raise ValueError("não foi possível descodificar o ficheiro (esperado UTF-8 ou Latin-1)")
+
+
+def importar_csv():
+    cabecalho("IMPORTAR CSV")
+    print()
+    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
+    if not nome:
+        return
+
+    if not nome.endswith(EXT_CSV):
+        nome += EXT_CSV
+
+    try:
+        adoptar_dataframe(_ler_csv(nome), detectar_datas=True)
+        print(f"\n{UI_INDENTACAO_1}'{nome}' importado: {len(tabela)} linhas, {len(tabela.columns)} colunas.")
+    except FileNotFoundError:
+        print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
+    except Exception as e:
+        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
+    pausar()
+
+
+def exportar_csv():
+    if tabela.columns.empty:
+        print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
+        pausar()
+        return
+
+    cabecalho("EXPORTAR CSV")
+    print()
+    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
+    if not nome:
+        return
+    if not nome.endswith(EXT_CSV):
+        nome += EXT_CSV
+
+    try:
+        # utf-8-sig: o Excel reconhece os acentos; datas em DD/MM/AAAA, como na aplicação.
+        tabela.to_csv(nome, index=False, encoding="utf-8-sig", date_format="%d/%m/%Y")
+        print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
         print(f"\n{UI_INDENTACAO_1}Erro: {e}")
     pausar()
@@ -1963,10 +2078,12 @@ def menu_folha():
         print(f"{UI_INDENTACAO_1}[5] Exportar PDF  (tabela + estatísticas)")
         print(f"{UI_INDENTACAO_1}[6] Folha dummy (dados de exemplo)")
         print(f"{UI_INDENTACAO_1}[7] Limpar folha (reset)")
+        print(f"{UI_INDENTACAO_1}[8] Importar CSV")
+        print(f"{UI_INDENTACAO_1}[9] Exportar CSV")
         print(f"{UI_INDENTACAO_1}[0] Voltar")
         print("-" * LARGURA)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "5", "6", "7", "0"})
+        escolha = pedir_opcao({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
         if escolha == "0":
             break
         elif escolha == "1":
@@ -1983,6 +2100,10 @@ def menu_folha():
             criar_folha_dummy()
         elif escolha == "7":
             limpar_folha()
+        elif escolha == "8":
+            importar_csv()
+        elif escolha == "9":
+            exportar_csv()
 
 
 def menu_linhas():
@@ -2086,7 +2207,7 @@ def sobre():
     print(f"{UI_INDENTACAO_2}- Estatísticas e análise avançada (groupby, duplicados)")
     print(f"{UI_INDENTACAO_2}- Gráficos: barras, linhas, circular, dispersão, área,")
     print(f"{UI_INDENTACAO_2}  histograma, boxplot, heatmap, tendência polinomial")
-    print(f"{UI_INDENTACAO_2}- Importar / Exportar Excel, Word, PDF")
+    print(f"{UI_INDENTACAO_2}- Importar / Exportar Excel e CSV; exportar Word e PDF")
     print(f"{UI_INDENTACAO_2}- Undo / Redo e gravação automática de estado")
     print()
     print(f"{UI_INDENTACAO_1}Requisitos: Python 3.x · pandas · numpy · matplotlib · python-docx · fpdf2")
