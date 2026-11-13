@@ -22,27 +22,27 @@ def test_falha_de_importacao_fica_registada_com_traceback(app, tmp_path, caplog)
     (tmp_path / "vazio.csv").write_text("", encoding="utf-8")
 
     with caplog.at_level(logging.ERROR, logger="termifolha"):
-        app.run(app.m.importar_csv, "vazio")
+        app.run(app.m.import_csv, "vazio")
 
-    registo = next(r for r in caplog.records if "importar_csv" in r.getMessage())
-    assert registo.exc_info is not None
+    record = next(r for r in caplog.records if "import_csv" in r.getMessage())
+    assert record.exc_info is not None
 
 
 def test_falha_a_gravar_estado_fica_registada(app, tmp_path, caplog):
-    app.m.FICHEIRO_ESTADO = str(tmp_path / "inexistente" / "e.json")
+    app.m.STATE_FILE = str(tmp_path / "inexistente" / "e.json")
 
     with caplog.at_level(logging.ERROR, logger="termifolha"):
-        app.m.guardar_estado()
+        app.m.save_state()
 
     assert any("guardar o estado" in r.getMessage() for r in caplog.records)
 
 
 def test_configurar_log_escreve_no_ficheiro(app, tmp_path):
     ficheiro = tmp_path / "t.log"
-    app.m.FICHEIRO_LOG = str(ficheiro)
+    app.m.LOG_FILE = str(ficheiro)
     antes = list(app.m.log.handlers)
     try:
-        app.m.configurar_log()
+        app.m.configure_log()
         app.m.log.error("mensagem de teste")
         for h in app.m.log.handlers:
             h.flush()
@@ -56,15 +56,15 @@ def test_configurar_log_escreve_no_ficheiro(app, tmp_path):
 
 
 def test_configurar_log_sem_permissoes_nao_rebenta(app, tmp_path):
-    app.m.FICHEIRO_LOG = str(tmp_path / "nao_existe" / "t.log")
+    app.m.LOG_FILE = str(tmp_path / "nao_existe" / "t.log")
     antes = len(app.m.log.handlers)
 
-    app.m.configurar_log()
+    app.m.configure_log()
 
     assert len(app.m.log.handlers) == antes
 
 
-@pytest.mark.parametrize("operacao", ["exportar_pdf", "exportar_word", "exportar_csv", "exportar"])
+@pytest.mark.parametrize("operacao", ["export_pdf", "export_word", "export_csv", "export_excel"])
 def test_falha_de_exportacao_fica_registada(app, tmp_path, caplog, operacao):
     app.dummy()
 

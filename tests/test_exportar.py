@@ -3,15 +3,15 @@ import warnings
 import pandas as pd
 
 
-def _exportar_pdf(app, nome="saida"):
-    app.run(app.m.exportar_pdf, nome)
+def _exportar_pdf(app, name="saida"):
+    app.run(app.m.export_pdf, name)
 
 
 def test_exportar_pdf_com_caracteres_fora_de_latin1_nao_falha(app, capsys, tmp_path):
     """Regressão B4: com fpdf2 e fontes core, 'ż' abortava toda a exportação."""
-    app.m.tabela = pd.DataFrame({"Nome": ["Zażółć", "Café €"], "N": [1, 2]})
-    app.m.tipos = {"Nome": str, "N": int}
-    app.m.aplicar_tipos()
+    app.m.table = pd.DataFrame({"Nome": ["Zażółć", "Café €"], "N": [1, 2]})
+    app.m.col_types = {"Nome": str, "N": int}
+    app.m.apply_types()
 
     _exportar_pdf(app)
 
@@ -41,21 +41,21 @@ def test_exportar_pdf_preserva_acentos_do_portugues(app, tmp_path):
 
 def test_excel_exportado_pode_ser_reimportado_sem_perdas(app, tmp_path):
     app.dummy()
-    original = app.m.tabela.copy()
+    original = app.m.table.copy()
 
-    app.run(app.m.exportar, "ida_e_volta")
-    app.run(app.m.importar, str(tmp_path / "ida_e_volta.xlsx"))
+    app.run(app.m.export_excel, "ida_e_volta")
+    app.run(app.m.import_excel, str(tmp_path / "ida_e_volta.xlsx"))
 
-    assert list(app.m.tabela.columns) == list(original.columns)
-    assert len(app.m.tabela) == len(original)
-    assert app.m.tabela["Salario"].tolist() == original["Salario"].tolist()
-    assert str(app.m.tabela["Admissao"].dtype).startswith("datetime64")
+    assert list(app.m.table.columns) == list(original.columns)
+    assert len(app.m.table) == len(original)
+    assert app.m.table["Salario"].tolist() == original["Salario"].tolist()
+    assert str(app.m.table["Admissao"].dtype).startswith("datetime64")
 
 
 def test_exportar_word_gera_ficheiro(app, tmp_path):
     app.dummy()
 
-    app.run(app.m.exportar_word, "relatorio")
+    app.run(app.m.export_word, "relatorio")
 
     assert (tmp_path / "relatorio.docx").stat().st_size > 0
 
@@ -72,9 +72,9 @@ def test_exportar_pdf_com_fonte_unicode_quando_fpdf2(app, tmp_path):
 
     if not _fpdf_moderno():
         pytest.skip("fpdf antigo: sem suporte Unicode, mantém Latin-1")
-    app.m.tabela = pd.DataFrame({"Nome": ["Zażółć"], "N": [1]})
-    app.m.tipos = {"Nome": str, "N": int}
-    app.m.aplicar_tipos()
+    app.m.table = pd.DataFrame({"Nome": ["Zażółć"], "N": [1]})
+    app.m.col_types = {"Nome": str, "N": int}
+    app.m.apply_types()
 
     _exportar_pdf(app)
 
@@ -86,9 +86,9 @@ def test_exportar_pdf_com_fpdf_antigo_degrada_para_latin1(app, tmp_path):
 
     if _fpdf_moderno():
         pytest.skip("só aplicável ao fpdf antigo")
-    app.m.tabela = pd.DataFrame({"Nome": ["Zażółć"], "N": [1]})
-    app.m.tipos = {"Nome": str, "N": int}
-    app.m.aplicar_tipos()
+    app.m.table = pd.DataFrame({"Nome": ["Zażółć"], "N": [1]})
+    app.m.col_types = {"Nome": str, "N": int}
+    app.m.apply_types()
 
     _exportar_pdf(app)
 
@@ -99,14 +99,14 @@ def test_texto_pdf_usa_latin1_sem_fonte_unicode(app):
     class FalsoPdf:
         tf_unicode = False
 
-    assert app.m._texto_pdf(FalsoPdf(), "Zażółć João") == "Za?ó?? João"
+    assert app.m._pdf_text(FalsoPdf(), "Zażółć João") == "Za?ó?? João"
 
 
 def test_texto_pdf_preserva_texto_com_fonte_unicode(app):
     class FalsoPdf:
         tf_unicode = True
 
-    assert app.m._texto_pdf(FalsoPdf(), "Zażółć") == "Zażółć"
+    assert app.m._pdf_text(FalsoPdf(), "Zażółć") == "Zażółć"
 
 
 def test_configurar_fonte_pdf_recai_em_helvetica_se_falhar(app, monkeypatch):
@@ -117,5 +117,5 @@ def test_configurar_fonte_pdf_recai_em_helvetica_se_falhar(app, monkeypatch):
     monkeypatch.setattr(app.m.fpdf_lib, "FPDF_VERSION", "2.9.0", raising=False)
     pdf = PdfSemFontes()
 
-    assert app.m._configurar_fonte_pdf(pdf) == "Helvetica"
+    assert app.m._configure_pdf_font(pdf) == "Helvetica"
     assert pdf.tf_unicode is False

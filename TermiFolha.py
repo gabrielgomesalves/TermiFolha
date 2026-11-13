@@ -56,59 +56,59 @@ from docx import Document
 from fpdf import FPDF
 
 # Constantes da aplicação (nome, versão, ficheiros, dimensões UI)
-NOME_APP          = "TermiFolha"
-TITULO_APP        = "TermiFolha  —  Folha de Cálculo CLI"
-VERSAO_APP        = "1.0"
-AUTOR_APP         = "Gabriel Gomes Alves"
-_PASTA_PROGRAMA   = os.path.dirname(os.path.abspath(__file__))
-FICHEIRO_ESTADO   = os.path.join(_PASTA_PROGRAMA, ".termifolha_estado.json")
-FICHEIRO_ESTADO_LEGADO = os.path.join(_PASTA_PROGRAMA, ".termifolha_estado.pkl")  # formato antigo, só lido para migrar
-FICHEIRO_LOG      = os.path.join(_PASTA_PROGRAMA, ".termifolha.log")
+APP_NAME          = "TermiFolha"
+APP_TITLE        = "TermiFolha  —  Folha de Cálculo CLI"
+APP_VERSION        = "1.0"
+APP_AUTHOR         = "Gabriel Gomes Alves"
+_PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
+STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")
+LEGACY_STATE_FILE = os.path.join(_PROGRAM_DIR, ".termifolha_estado.pkl")  # formato antigo, só lido para migrar
+LOG_FILE      = os.path.join(_PROGRAM_DIR, ".termifolha.log")
 EXT_EXCEL         = ".xlsx"
 EXT_CSV           = ".csv"
 EXT_WORD          = ".docx"
 EXT_PDF           = ".pdf"
-LARGURA           = 72
-COL_LIMITE        = 15
-TIPO_DATA         = "date"  # sentinel para colunas data (pandas sem dtype Python nativo) - https://pandas.pydata.org/docs/user_guide/missing_data.html
+WIDTH           = 72
+COLUMN_WIDTH_LIMIT        = 15
+DATE_TYPE         = "date"  # sentinel para colunas data (pandas sem dtype Python nativo) - https://pandas.pydata.org/docs/user_guide/missing_data.html
 
-TIPOS             = {
+TYPE_CHOICES             = {
     "1": (str,       "Texto"),
     "2": (int,       "Inteiro"),
     "3": (float,     "Decimal"),
-    "4": (TIPO_DATA, "Data (DD/MM/AAAA)"),
+    "4": (DATE_TYPE, "Data (DD/MM/AAAA)"),
 }
-NOME_TIPO         = {tipo: nome.lower() for tipo, nome in TIPOS.values()}
-HIST_LIMITE       = 4
-UI_INDENTACAO_1   = "  "
-UI_INDENTACAO_2   = "    "
+TYPE_NAME         = {col_type: name.lower() for col_type, name in TYPE_CHOICES.values()}
+HISTORY_LIMIT       = 4
+UI_INDENT_1   = "  "
+UI_INDENT_2   = "    "
 
 log = logging.getLogger("termifolha")  # sem handlers por omissão; main() configura o ficheiro de registo
 log.addHandler(logging.NullHandler())
 
 # Estado global: tabela de dados, tipos por coluna e histórico undo/redo
-tabela = pd.DataFrame()
-tipos = {}
+table = pd.DataFrame()
+col_types = {}
 
-undo = []
-redo = []
+undo_stack = []
+redo_stack = []
 
 
 # Utilitários de terminal e formatação de valores
-def limpar():
+def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")
 
 
-def pausar():
-    input(f"\n{UI_INDENTACAO_1}Prima [ENTER] para continuar...")
+def pause():
+    input(f"\n{UI_INDENT_1}Prima [ENTER] para continuar...")
 
 
-def truncar(valor, largura):
-    s = str(valor)
-    return s if len(s) <= largura else s[:largura - 1] + "~"
+def truncate(value, max_width):
+    s = str(value)
+    return s if len(s) <= max_width else s[:max_width - 1] + "~"
 
 
-def formatar_valor(val):
+def format_value(val):
     if pd.isna(val):
         return "--"
     if hasattr(val, "strftime"):
@@ -116,7 +116,7 @@ def formatar_valor(val):
     return str(val)
 
 
-def formatar_numero(val):
+def format_number(val):
     if pd.isna(val):
         return "--"
     if isinstance(val, float):
@@ -129,276 +129,276 @@ def formatar_numero(val):
 
 
 # Desenho da tabela e cabeçalho no terminal
-def larguras(data):
-    larg = {}
+def column_widths(data):
+    widths = {}
     for col in data.columns:
         w = len(str(col))
         if not data.empty:
             for idx in data.index:
                 v = data.at[idx, col]
-                disp_len = len(formatar_valor(v))
+                disp_len = len(format_value(v))
                 if disp_len > w:
                     w = disp_len
-        larg[col] = min(w, COL_LIMITE)
-    return larg
+        widths[col] = min(w, COLUMN_WIDTH_LIMIT)
+    return widths
 
 
-def desenhar_tabela_dados(data):
+def draw_data_table(data):
     if data.columns.empty:
-        print(f"{UI_INDENTACAO_1}(tabela vazia — crie uma folha primeiro)")
+        print(f"{UI_INDENT_1}(tabela vazia — crie uma folha primeiro)")
         return
 
-    larg = larguras(data)
-    idx_w = max(3, len(str(len(data))))
+    widths = column_widths(data)
+    index_width = max(3, len(str(len(data))))
 
-    cab = UI_INDENTACAO_1 + "#".rjust(idx_w) + " |"
-    sep = UI_INDENTACAO_1 + "-" * idx_w + "-+"
+    head_line = UI_INDENT_1 + "#".rjust(index_width) + " |"
+    sep = UI_INDENT_1 + "-" * index_width + "-+"
     for col in data.columns:
-        w = larg[col]
-        cab += " " + truncar(col, w).ljust(w) + " |"
+        w = widths[col]
+        head_line += " " + truncate(col, w).ljust(w) + " |"
         sep += "-" * w + "--+"
 
-    print(cab)
+    print(head_line)
     print(sep)
 
     if data.empty:
-        print(UI_INDENTACAO_1 + " " * idx_w + f"{UI_INDENTACAO_1}(sem linhas)")
+        print(UI_INDENT_1 + " " * index_width + f"{UI_INDENT_1}(sem linhas)")
         return
 
     for idx in data.index:
-        linha = UI_INDENTACAO_1 + str(idx).rjust(idx_w) + " |"
+        line = UI_INDENT_1 + str(idx).rjust(index_width) + " |"
         for col in data.columns:
             val = data.at[idx, col]
-            mostrado = truncar(formatar_valor(val), larg[col])
-            linha += " " + mostrado.ljust(larg[col]) + " |"
-        print(linha)
+            shown = truncate(format_value(val), widths[col])
+            line += " " + shown.ljust(widths[col]) + " |"
+        print(line)
 
 
-def desenhar_tabela():
-    desenhar_tabela_dados(tabela)
+def draw_table():
+    draw_data_table(table)
 
 
-def cabecalho(subtitulo="MENU PRINCIPAL"):
-    limpar()
-    print("=" * LARGURA)
-    print(TITULO_APP.center(LARGURA))
-    print("=" * LARGURA)
-    if tabela.columns.empty:
-        estado = "folha vazia"
+def header(subtitle="MENU PRINCIPAL"):
+    clear_screen()
+    print("=" * WIDTH)
+    print(APP_TITLE.center(WIDTH))
+    print("=" * WIDTH)
+    if table.columns.empty:
+        state_text = "folha vazia"
     else:
-        estado = f"{len(tabela.columns)} coluna(s)  |  {len(tabela)} linha(s)"
-    print(f"{UI_INDENTACAO_1}Estado: {estado}")
-    print("-" * LARGURA)
+        state_text = f"{len(table.columns)} coluna(s)  |  {len(table)} linha(s)"
+    print(f"{UI_INDENT_1}Estado: {state_text}")
+    print("-" * WIDTH)
     print()
-    desenhar_tabela()
+    draw_table()
     print()
-    print("=" * LARGURA)
-    print(subtitulo.center(LARGURA))
-    print("-" * LARGURA)
+    print("=" * WIDTH)
+    print(subtitle.center(WIDTH))
+    print("-" * WIDTH)
 
 
-def imprimir_tabela_pandas(obj, prefixo=UI_INDENTACAO_2):
-    for linha in obj.to_string().split("\n"):
-        print(f"{prefixo}{linha}")
+def print_pandas_table(obj, prefix=UI_INDENT_2):
+    for line in obj.to_string().split("\n"):
+        print(f"{prefix}{line}")
 
 
 # Entrada do utilizador: opções, tipos, conversão e prompts
-def pedir_opcao(validas):
+def ask_option(valid_cols):
     while True:
-        escolha = input(f"{UI_INDENTACAO_1}Opção: ").strip().upper()
-        if escolha in validas:
-            return escolha
-        print(f"{UI_INDENTACAO_1}Opção inválida.")
+        choice = input(f"{UI_INDENT_1}Opção: ").strip().upper()
+        if choice in valid_cols:
+            return choice
+        print(f"{UI_INDENT_1}Opção inválida.")
 
 
-def pedir_tipo():
-    opcoes = "  ".join(f"[{k}] {nome}" for k, (_, nome) in TIPOS.items())
+def ask_type():
+    options = "  ".join(f"[{k}] {name}" for k, (_, name) in TYPE_CHOICES.items())
     while True:
-        print(f"{UI_INDENTACAO_1}Tipo: {opcoes}")
-        t = input(f"{UI_INDENTACAO_1}Tipo: ").strip()
-        if t in TIPOS:
-            return TIPOS[t][0]
-        print(f"{UI_INDENTACAO_1}Tipo inválido.")
+        print(f"{UI_INDENT_1}Tipo: {options}")
+        t = input(f"{UI_INDENT_1}Tipo: ").strip()
+        if t in TYPE_CHOICES:
+            return TYPE_CHOICES[t][0]
+        print(f"{UI_INDENT_1}Tipo inválido.")
 
 
-def converter(valor, tipo):
-    if tipo == TIPO_DATA:
-        return pd.to_datetime(valor.strip(), format="%d/%m/%Y")
-    return tipo(valor.strip())
+def convert_value(value, col_type):
+    if col_type == DATE_TYPE:
+        return pd.to_datetime(value.strip(), format="%d/%m/%Y")
+    return col_type(value.strip())
 
 
-def resolver_coluna(nome_input, fonte=None):
-    fonte = tabela.columns if fonte is None else fonte
-    nome_lower = nome_input.lower()
-    for col in fonte:
-        if str(col).lower() == nome_lower:
+def resolve_column(name_input, source=None):
+    source = table.columns if source is None else source
+    name_lower = name_input.lower()
+    for col in source:
+        if str(col).lower() == name_lower:
             return col
     return None
 
 
-def confirmar(mensagem):
-    resp = input(f"{UI_INDENTACAO_1}{mensagem} [S/N]: ").strip().lower()
-    return resp in ("s", "sim", "y", "yes")
+def confirm(message):
+    reply = input(f"{UI_INDENT_1}{message} [S/N]: ").strip().lower()
+    return reply in ("s", "sim", "y", "yes")
 
 
-def pedir_coluna(mensagem="Coluna"):
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
-    valor = input(f"{UI_INDENTACAO_1}{mensagem}: ").strip()
-    if valor.lower() == "sair":
+def ask_column(message="Coluna"):
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    value = input(f"{UI_INDENT_1}{message}: ").strip()
+    if value.lower() == "sair":
         return None
-    col = resolver_coluna(valor)
+    col = resolve_column(value)
     if col is None:
-        print(f"{UI_INDENTACAO_1}Coluna não existe.")
-        pausar()
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
         return None
     return col
 
 
-_TODAS = object()  # sentinela: "todas as colunas"
+_ALL = object()  # sentinela: "todas as colunas"
 
 
-def pedir_coluna_ou_todas(mensagem="Coluna"):
+def ask_column_or_all(message="Coluna"):
     """Como pedir_coluna, mas Enter significa todas as colunas (devolve _TODAS). None se cancelar."""
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
-    valor = input(f"{UI_INDENTACAO_1}{mensagem} (Enter = todas): ").strip()
-    if valor.lower() == "sair":
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    value = input(f"{UI_INDENT_1}{message} (Enter = todas): ").strip()
+    if value.lower() == "sair":
         return None
-    if not valor:
-        return _TODAS
-    col = resolver_coluna(valor)
+    if not value:
+        return _ALL
+    col = resolve_column(value)
     if col is None:
-        print(f"{UI_INDENTACAO_1}Coluna não existe.")
-        pausar()
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
         return None
     return col
 
 
-def pedir_coluna_numerica(mensagem="Coluna numérica"):
-    num_cols = tabela.select_dtypes(include="number").columns.tolist()
+def ask_numeric_column(message="Coluna numérica"):
+    num_cols = table.select_dtypes(include="number").columns.tolist()
     if not num_cols:
-        print(f"{UI_INDENTACAO_1}Sem colunas numéricas.")
-        pausar()
+        print(f"{UI_INDENT_1}Sem colunas numéricas.")
+        pause()
         return None
-    print(f"{UI_INDENTACAO_1}Colunas numéricas: {', '.join(num_cols)}")
-    valor = input(f"{UI_INDENTACAO_1}{mensagem}: ").strip()
-    if valor.lower() == "sair":
+    print(f"{UI_INDENT_1}Colunas numéricas: {', '.join(num_cols)}")
+    value = input(f"{UI_INDENT_1}{message}: ").strip()
+    if value.lower() == "sair":
         return None
-    col = resolver_coluna(valor, fonte=num_cols)
+    col = resolve_column(value, source=num_cols)
     if col is None:
-        print(f"{UI_INDENTACAO_1}Coluna inválida ou não numérica.")
-        pausar()
+        print(f"{UI_INDENT_1}Coluna inválida ou não numérica.")
+        pause()
         return None
     return col
 
 
-def pedir_colunas_numericas(min_n=1, max_n=None, mensagem="Colunas numéricas (separadas por vírgula)"):
-    num_cols = tabela.select_dtypes(include="number").columns.tolist()
+def ask_numeric_columns(min_n=1, max_n=None, message="Colunas numéricas (separadas por vírgula)"):
+    num_cols = table.select_dtypes(include="number").columns.tolist()
     if len(num_cols) < min_n:
-        print(f"{UI_INDENTACAO_1}Necessário pelo menos {min_n} coluna(s) numérica(s).")
-        pausar()
+        print(f"{UI_INDENT_1}Necessário pelo menos {min_n} coluna(s) numérica(s).")
+        pause()
         return None
 
-    validas = [c for c in num_cols if tabela[c].notna().any()]
-    if len(validas) < min_n:
-        print(f"{UI_INDENTACAO_1}Necessário pelo menos {min_n} coluna(s) numérica(s) com dados.")
-        pausar()
+    valid_cols = [c for c in num_cols if table[c].notna().any()]
+    if len(valid_cols) < min_n:
+        print(f"{UI_INDENT_1}Necessário pelo menos {min_n} coluna(s) numérica(s) com dados.")
+        pause()
         return None
 
-    print(f"{UI_INDENTACAO_1}Colunas numéricas disponíveis: {', '.join(validas)}")
+    print(f"{UI_INDENT_1}Colunas numéricas disponíveis: {', '.join(valid_cols)}")
     if max_n != 1:
-        print(f"{UI_INDENTACAO_1}(pode indicar várias colunas separadas por vírgula)")
-    valor = input(f"{UI_INDENTACAO_1}{mensagem}: ").strip()
-    if valor.lower() == "sair":
+        print(f"{UI_INDENT_1}(pode indicar várias colunas separadas por vírgula)")
+    value = input(f"{UI_INDENT_1}{message}: ").strip()
+    if value.lower() == "sair":
         return None
 
-    pedidos = [v.strip() for v in valor.split(",") if v.strip()]
-    if not pedidos:
-        print(f"{UI_INDENTACAO_1}Deve indicar pelo menos uma coluna.")
-        pausar()
+    requested = [v.strip() for v in value.split(",") if v.strip()]
+    if not requested:
+        print(f"{UI_INDENT_1}Deve indicar pelo menos uma coluna.")
+        pause()
         return None
 
-    escolhidas = []
-    for nome in pedidos:
-        col = resolver_coluna(nome, fonte=validas)
+    chosen = []
+    for name in requested:
+        col = resolve_column(name, source=valid_cols)
         if col is None:
-            print(f"{UI_INDENTACAO_1}Coluna inválida ou sem dados numéricos: '{nome}'.")
-            pausar()
+            print(f"{UI_INDENT_1}Coluna inválida ou sem dados numéricos: '{name}'.")
+            pause()
             return None
-        if col in escolhidas:
-            print(f"{UI_INDENTACAO_1}Coluna repetida: '{col}'.")
-            pausar()
+        if col in chosen:
+            print(f"{UI_INDENT_1}Coluna repetida: '{col}'.")
+            pause()
             return None
-        escolhidas.append(col)
+        chosen.append(col)
 
-    if len(escolhidas) < min_n:
-        print(f"{UI_INDENTACAO_1}Deve selecionar pelo menos {min_n} coluna(s).")
-        pausar()
+    if len(chosen) < min_n:
+        print(f"{UI_INDENT_1}Deve selecionar pelo menos {min_n} coluna(s).")
+        pause()
         return None
-    if max_n is not None and len(escolhidas) > max_n:
-        print(f"{UI_INDENTACAO_1}Deve selecionar no máximo {max_n} coluna(s).")
-        pausar()
+    if max_n is not None and len(chosen) > max_n:
+        print(f"{UI_INDENT_1}Deve selecionar no máximo {max_n} coluna(s).")
+        pause()
         return None
-    return escolhidas
+    return chosen
 
 
-def pedir_inteiro_intervalo(mensagem, minimo, maximo, default=None):
-    valor = input(mensagem).strip()
-    if not valor:
+def ask_int_in_range(message, minimum, maximum, default=None):
+    value = input(message).strip()
+    if not value:
         return default
     try:
-        numero = int(valor)
+        number = int(value)
     except ValueError:
-        print(f"{UI_INDENTACAO_1}Valor inválido (inteiro esperado).")
-        pausar()
+        print(f"{UI_INDENT_1}Valor inválido (inteiro esperado).")
+        pause()
         return None
-    if numero < minimo or numero > maximo:
-        print(f"{UI_INDENTACAO_1}Valor fora do intervalo [{minimo}, {maximo}].")
-        pausar()
+    if number < minimum or number > maximum:
+        print(f"{UI_INDENT_1}Valor fora do intervalo [{minimum}, {maximum}].")
+        pause()
         return None
-    return numero
+    return number
 
 
-def tipo_de(col):
-    return tipos.get(col, str)
+def type_of(col):
+    return col_types.get(col, str)
 
 
 _DTYPE_INFER = [
     (pd.api.types.is_integer_dtype,        int),
     (pd.api.types.is_float_dtype,          float),
-    (pd.api.types.is_datetime64_any_dtype, TIPO_DATA),
+    (pd.api.types.is_datetime64_any_dtype, DATE_TYPE),
 ]
 
 
-def inferir_tipo(serie):
-    for check, tipo in _DTYPE_INFER:
-        if check(serie):
-            return tipo
+def infer_type(series):
+    for check, col_type in _DTYPE_INFER:
+        if check(series):
+            return col_type
     return str
 
 
 # Aplicação de tipos, persistência em ficheiro e histórico undo/redo
-def aplicar_tipos():
-    global tabela
-    for col in tabela.columns:
-        tipo = tipo_de(col)
+def apply_types():
+    global table
+    for col in table.columns:
+        col_type = type_of(col)
         try:
-            if tipo is int:
-                tabela[col] = pd.to_numeric(tabela[col], errors="coerce").astype("Int64")
-            elif tipo is float:
-                tabela[col] = pd.to_numeric(tabela[col], errors="coerce")
-            elif tipo == TIPO_DATA:
-                tabela[col] = pd.to_datetime(tabela[col], errors="coerce")
+            if col_type is int:
+                table[col] = pd.to_numeric(table[col], errors="coerce").astype("Int64")
+            elif col_type is float:
+                table[col] = pd.to_numeric(table[col], errors="coerce")
+            elif col_type == DATE_TYPE:
+                table[col] = pd.to_datetime(table[col], errors="coerce")
         except Exception:
             pass
 
 
 # Persistência: o estado é gravado em JSON (nunca em pickle, que executa código ao carregar).
-_NOME_TIPO_JSON = {str: "str", int: "int", float: "float", TIPO_DATA: "date"}
-_TIPO_DE_NOME_JSON = {nome: tipo for tipo, nome in _NOME_TIPO_JSON.items()}
-_VERSAO_ESTADO = 1
+_JSON_TYPE_NAME = {str: "str", int: "int", float: "float", DATE_TYPE: "date"}
+_TYPE_FROM_JSON_NAME = {name: col_type for col_type, name in _JSON_TYPE_NAME.items()}
+_STATE_VERSION = 1
 
 
-def _valor_json(v):
+def _json_value(v):
     if pd.isna(v):
         return None
     if hasattr(v, "isoformat"):
@@ -408,47 +408,47 @@ def _valor_json(v):
     return v
 
 
-def _estado_para_dict():
-    colunas = [str(c) for c in tabela.columns]
-    linhas = [[_valor_json(v) for v in registo] for registo in tabela.itertuples(index=False, name=None)]
+def _state_to_dict():
+    column_names = [str(c) for c in table.columns]
+    lines = [[_json_value(v) for v in record] for record in table.itertuples(index=False, name=None)]
     return {
-        "versao": _VERSAO_ESTADO,
-        "colunas": colunas,
-        "tipos": {str(c): _NOME_TIPO_JSON.get(t, "str") for c, t in tipos.items()},
-        "dados": linhas,
+        "versao": _STATE_VERSION,
+        "colunas": column_names,
+        "tipos": {str(c): _JSON_TYPE_NAME.get(t, "str") for c, t in col_types.items()},
+        "dados": lines,
     }
 
 
-def _estado_de_dict(d):
+def _state_from_dict(d):
     """Valida e reconstrói (tabela, tipos). Levanta ValueError se o conteúdo não for um estado válido."""
-    if not isinstance(d, dict) or d.get("versao") != _VERSAO_ESTADO:
+    if not isinstance(d, dict) or d.get("versao") != _STATE_VERSION:
         raise ValueError("versão de estado desconhecida")
-    colunas, nomes_tipos, dados = d.get("colunas"), d.get("tipos"), d.get("dados")
-    if not (isinstance(colunas, list) and all(isinstance(c, str) for c in colunas)):
+    column_names, type_names, data_rows = d.get("colunas"), d.get("tipos"), d.get("dados")
+    if not (isinstance(column_names, list) and all(isinstance(c, str) for c in column_names)):
         raise ValueError("lista de colunas inválida")
-    if not (isinstance(nomes_tipos, dict) and isinstance(dados, list)):
+    if not (isinstance(type_names, dict) and isinstance(data_rows, list)):
         raise ValueError("estrutura inválida")
-    if any(not isinstance(r, list) or len(r) != len(colunas) for r in dados):
+    if any(not isinstance(r, list) or len(r) != len(column_names) for r in data_rows):
         raise ValueError("linha com número de valores diferente do número de colunas")
-    novos_tipos = {c: _TIPO_DE_NOME_JSON.get(nomes_tipos.get(c), str) for c in colunas}
-    df = pd.DataFrame(dados, columns=colunas) if dados else pd.DataFrame(columns=colunas)
-    return df, novos_tipos
+    new_col_types = {c: _TYPE_FROM_JSON_NAME.get(type_names.get(c), str) for c in column_names}
+    df = pd.DataFrame(data_rows, columns=column_names) if data_rows else pd.DataFrame(columns=column_names)
+    return df, new_col_types
 
 
-def guardar_estado():
+def save_state():
     """Grava o estado de forma atómica. Devolve True se gravou, False se falhou (e avisa o utilizador)."""
-    temporario = FICHEIRO_ESTADO + ".tmp"
+    temp_path = STATE_FILE + ".tmp"
     try:
-        with open(temporario, "w", encoding="utf-8") as f:
-            json.dump(_estado_para_dict(), f, ensure_ascii=False)
-        os.replace(temporario, FICHEIRO_ESTADO)
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(_state_to_dict(), f, ensure_ascii=False)
+        os.replace(temp_path, STATE_FILE)
         return True
     except Exception as e:
         log.exception("Falha ao guardar o estado")
-        print(f"{UI_INDENTACAO_1}Aviso: não foi possível guardar o estado ({e}).")
-        print(f"{UI_INDENTACAO_1}As alterações mantêm-se em memória; exporte para Excel para não as perder.")
+        print(f"{UI_INDENT_1}Aviso: não foi possível guardar o estado ({e}).")
+        print(f"{UI_INDENT_1}As alterações mantêm-se em memória; exporte para Excel para não as perder.")
         try:
-            os.remove(temporario)
+            os.remove(temp_path)
         except OSError:
             pass
         return False
@@ -480,373 +480,373 @@ class _UnpicklerSeguro(pickle.Unpickler):
         raise pickle.UnpicklingError(f"referência recusada: {module}.{name}")
 
 
-def _preservar_ficheiro_invalido(caminho, erro):
-    copia = caminho + ".corrompido"
-    log.error("Estado inválido em %s: %s", caminho, erro)
-    print(f"{UI_INDENTACAO_1}Aviso: o estado guardado está corrompido ({erro}).")
+def _preserve_invalid_file(path, error):
+    backup_path = path + ".corrompido"
+    log.error("Estado inválido em %s: %s", path, error)
+    print(f"{UI_INDENT_1}Aviso: o estado guardado está corrompido ({error}).")
     try:
-        os.replace(caminho, copia)
-        print(f"{UI_INDENTACAO_1}O ficheiro foi preservado como '{copia}'. A começar com uma folha vazia.")
-    except OSError as erro_copia:
-        print(f"{UI_INDENTACAO_1}Não foi possível preservar o ficheiro ({erro_copia}).")
+        os.replace(path, backup_path)
+        print(f"{UI_INDENT_1}O ficheiro foi preservado como '{backup_path}'. A começar com uma folha vazia.")
+    except OSError as backup_error:
+        print(f"{UI_INDENT_1}Não foi possível preservar o ficheiro ({backup_error}).")
 
 
-def carregar_estado():
-    global tabela, tipos
-    if os.path.exists(FICHEIRO_ESTADO):
+def load_state():
+    global table, col_types
+    if os.path.exists(STATE_FILE):
         try:
-            with open(FICHEIRO_ESTADO, encoding="utf-8") as f:
-                novo = _estado_de_dict(json.load(f))
+            with open(STATE_FILE, encoding="utf-8") as f:
+                loaded = _state_from_dict(json.load(f))
         except Exception as e:
-            _preservar_ficheiro_invalido(FICHEIRO_ESTADO, e)
-            tabela, tipos = pd.DataFrame(), {}
-            pausar()
+            _preserve_invalid_file(STATE_FILE, e)
+            table, col_types = pd.DataFrame(), {}
+            pause()
             return
-        migrado = False
-    elif os.path.exists(FICHEIRO_ESTADO_LEGADO):
+        migrated = False
+    elif os.path.exists(LEGACY_STATE_FILE):
         try:
-            with open(FICHEIRO_ESTADO_LEGADO, "rb") as f:
-                antigo_tabela, antigo_tipos = _UnpicklerSeguro(f).load()
-            if not isinstance(antigo_tabela, pd.DataFrame) or not isinstance(antigo_tipos, dict):
+            with open(LEGACY_STATE_FILE, "rb") as f:
+                old_table, old_col_types = _UnpicklerSeguro(f).load()
+            if not isinstance(old_table, pd.DataFrame) or not isinstance(old_col_types, dict):
                 raise ValueError("conteúdo inesperado")
-            antigo_tabela = antigo_tabela.copy()
-            antigo_tabela.columns = [str(c) for c in antigo_tabela.columns]
-            novo = (antigo_tabela, {str(c): t for c, t in antigo_tipos.items()})
+            old_table = old_table.copy()
+            old_table.columns = [str(c) for c in old_table.columns]
+            loaded = (old_table, {str(c): t for c, t in old_col_types.items()})
         except Exception as e:
-            _preservar_ficheiro_invalido(FICHEIRO_ESTADO_LEGADO, e)
-            tabela, tipos = pd.DataFrame(), {}
-            pausar()
+            _preserve_invalid_file(LEGACY_STATE_FILE, e)
+            table, col_types = pd.DataFrame(), {}
+            pause()
             return
-        migrado = True
+        migrated = True
     else:
         return
 
-    tabela, tipos = novo
-    aplicar_tipos()
-    if migrado and guardar_estado():
+    table, col_types = loaded
+    apply_types()
+    if migrated and save_state():
         try:
-            os.replace(FICHEIRO_ESTADO_LEGADO, FICHEIRO_ESTADO_LEGADO + ".migrado")
-            print(f"{UI_INDENTACAO_1}Estado antigo migrado para o novo formato (cópia em '{FICHEIRO_ESTADO_LEGADO}.migrado').")
-            pausar()
+            os.replace(LEGACY_STATE_FILE, LEGACY_STATE_FILE + ".migrado")
+            print(f"{UI_INDENT_1}Estado antigo migrado para o novo formato (cópia em '{LEGACY_STATE_FILE}.migrado').")
+            pause()
         except OSError as e:
             log.warning("Não foi possível renomear o estado antigo: %s", e)
-    undo.clear()
-    redo.clear()
-    undo.append((tabela.copy(), tipos.copy()))
+    undo_stack.clear()
+    redo_stack.clear()
+    undo_stack.append((table.copy(), col_types.copy()))
 
 
-def registar_ponto():
-    redo.clear()
-    undo.append((tabela.copy(), tipos.copy()))
-    if len(undo) > HIST_LIMITE:
-        undo.pop(0)
+def record_checkpoint():
+    redo_stack.clear()
+    undo_stack.append((table.copy(), col_types.copy()))
+    if len(undo_stack) > HISTORY_LIMIT:
+        undo_stack.pop(0)
 
 
-def desfazer():
-    global tabela, tipos
-    if len(undo) <= 1:
-        print(f"{UI_INDENTACAO_1}Nada para desfazer.")
-        pausar()
+def undo_last():
+    global table, col_types
+    if len(undo_stack) <= 1:
+        print(f"{UI_INDENT_1}Nada para desfazer.")
+        pause()
         return
-    redo.append(undo.pop())
-    tabela, tipos = undo[-1][0].copy(), undo[-1][1].copy()
-    guardar_estado()
-    print(f"{UI_INDENTACAO_1}Desfeito. ({len(undo) - 1} passo(s) atrás)")
-    pausar()
+    redo_stack.append(undo_stack.pop())
+    table, col_types = undo_stack[-1][0].copy(), undo_stack[-1][1].copy()
+    save_state()
+    print(f"{UI_INDENT_1}Desfeito. ({len(undo_stack) - 1} passo(s) atrás)")
+    pause()
 
 
-def refazer():
-    global tabela, tipos
-    if not redo:
-        print(f"{UI_INDENTACAO_1}Nada para refazer.")
-        pausar()
+def redo_last():
+    global table, col_types
+    if not redo_stack:
+        print(f"{UI_INDENT_1}Nada para refazer.")
+        pause()
         return
-    state = redo.pop()
-    undo.append(state)
-    tabela, tipos = state[0].copy(), state[1].copy()
-    guardar_estado()
-    print(f"{UI_INDENTACAO_1}Refeito. ({len(redo)} passo(s) para refazer)")
-    pausar()
+    state = redo_stack.pop()
+    undo_stack.append(state)
+    table, col_types = state[0].copy(), state[1].copy()
+    save_state()
+    print(f"{UI_INDENT_1}Refeito. ({len(redo_stack)} passo(s) para refazer)")
+    pause()
 
 
 # Gestão da folha: criar, importar, exportar, dummy, limpar
-def nova_folha():
-    global tabela, tipos
-    cabecalho("NOVA FOLHA")
-    print(f"{UI_INDENTACAO_1}Defina as colunas (nome vazio ou 'sair' para terminar | 'sair' sem colunas para cancelar)\n")
+def new_sheet():
+    global table, col_types
+    header("NOVA FOLHA")
+    print(f"{UI_INDENT_1}Defina as colunas (nome vazio ou 'sair' para terminar | 'sair' sem colunas para cancelar)\n")
 
-    colunas = []
-    novos_tipos = {}
+    column_names = []
+    new_col_types = {}
 
     while True:
-        nome = input(f"{UI_INDENTACAO_1}Nome da coluna {len(colunas) + 1}: ").strip()
-        if nome.lower() == "sair":
-            if not colunas:
-                print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-                pausar()
+        name = input(f"{UI_INDENT_1}Nome da coluna {len(column_names) + 1}: ").strip()
+        if name.lower() == "sair":
+            if not column_names:
+                print(f"\n{UI_INDENT_1}Operação cancelada.")
+                pause()
                 return
             break
-        if not nome:
-            if not colunas:
-                print(f"{UI_INDENTACAO_1}Precisa de pelo menos uma coluna.")
+        if not name:
+            if not column_names:
+                print(f"{UI_INDENT_1}Precisa de pelo menos uma coluna.")
                 continue
             break
-        if any(c.lower() == nome.lower() for c in colunas):
-            print(f"{UI_INDENTACAO_1}Coluna '{nome}' já existe. Por favor escolha um nome diferente.")
+        if any(c.lower() == name.lower() for c in column_names):
+            print(f"{UI_INDENT_1}Coluna '{name}' já existe. Por favor escolha um nome diferente.")
             continue
-        novos_tipos[nome] = pedir_tipo()
-        colunas.append(nome)
-        print(f"{UI_INDENTACAO_1}+ coluna '{nome}' do tipo '{NOME_TIPO.get(novos_tipos[nome], 'texto')}' adicionada.\n")
+        new_col_types[name] = ask_type()
+        column_names.append(name)
+        print(f"{UI_INDENT_1}+ coluna '{name}' do tipo '{TYPE_NAME.get(new_col_types[name], 'texto')}' adicionada.\n")
 
-    tabela = pd.DataFrame(columns=colunas)
-    tipos = novos_tipos
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Folha criada com {len(colunas)} coluna(s).")
-    pausar()
+    table = pd.DataFrame(columns=column_names)
+    col_types = new_col_types
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Folha criada com {len(column_names)} coluna(s).")
+    pause()
 
 
-def confirmar_substituir_folha():
+def confirm_replace_sheet():
     """Se já existir folha, pede confirmação antes de a substituir. Devolve False se o utilizador recusar."""
-    if tabela.columns.empty or confirmar("Folha actual será substituída. Continuar?"):
+    if table.columns.empty or confirm("Folha actual será substituída. Continuar?"):
         return True
-    print(f"{UI_INDENTACAO_1}Operação cancelada.")
-    pausar()
+    print(f"{UI_INDENT_1}Operação cancelada.")
+    pause()
     return False
 
 
-def importar():
-    global tabela, tipos
-    cabecalho("IMPORTAR EXCEL")
+def import_excel():
+    global table, col_types
+    header("IMPORTAR EXCEL")
     print()
-    if not confirmar_substituir_folha():
+    if not confirm_replace_sheet():
         return
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
 
-    if not nome.endswith(EXT_EXCEL):
-        nome += EXT_EXCEL
+    if not name.endswith(EXT_EXCEL):
+        name += EXT_EXCEL
 
     try:
-        adoptar_dataframe(pd.read_excel(nome), perguntar_inteiros=True)
-        print(f"\n{UI_INDENTACAO_1}'{nome}' importado: {len(tabela)} linhas, {len(tabela.columns)} colunas.")
+        adopt_dataframe(pd.read_excel(name), ask_integers=True)
+        print(f"\n{UI_INDENT_1}'{name}' importado: {len(table)} linhas, {len(table.columns)} colunas.")
     except FileNotFoundError:
-        print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
+        print(f"\n{UI_INDENT_1}Ficheiro '{name}' não encontrado.")
     except Exception as e:
-        log.exception("Falha em importar")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em import_excel")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def _inteiros_com_falhas(serie):
+def _integers_with_gaps(series):
     """True se for decimal com células vazias e todos os valores presentes forem inteiros (ex.: 25.0, 40.0, NaN)."""
-    validos = serie.dropna()
-    return pd.api.types.is_float_dtype(serie) and 0 < len(validos) < len(serie) and bool((validos % 1 == 0).all())
+    valid_values = series.dropna()
+    return pd.api.types.is_float_dtype(series) and 0 < len(valid_values) < len(series) and bool((valid_values % 1 == 0).all())
 
 
-def adoptar_dataframe(df, detectar_datas=False, perguntar_inteiros=False):
+def adopt_dataframe(df, detect_dates=False, ask_integers=False):
     """Torna `df` a folha activa (importação de Excel/CSV).
 
     O estado global só é alterado no fim, por isso uma falha a meio não deixa
     a folha actual meio substituída.
     """
-    global tabela, tipos
+    global table, col_types
     df = df.copy()
     # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
     df.columns = [str(c) for c in df.columns]
-    if perguntar_inteiros:
+    if ask_integers:
         # O pandas converte inteiros com células vazias em decimais; só o utilizador sabe se era intencional.
         for col in df.columns:
-            if _inteiros_com_falhas(df[col]) and confirmar(f"A coluna '{col}' só tem valores inteiros (e células vazias). Tratar como inteiro?"):
+            if _integers_with_gaps(df[col]) and confirm(f"A coluna '{col}' só tem valores inteiros (e células vazias). Tratar como inteiro?"):
                 df[col] = df[col].astype("Int64")
-    if detectar_datas:
+    if detect_dates:
         for col in df.columns:
-            if inferir_tipo(df[col]) is str:
-                datas = _como_datas(df[col])
-                if datas is not None:
-                    df[col] = datas
-    novos_tipos = {col: inferir_tipo(df[col]) for col in df.columns}
-    tabela, tipos = df, novos_tipos
-    aplicar_tipos()
-    guardar_estado()
-    registar_ponto()
+            if infer_type(df[col]) is str:
+                dates = _as_dates(df[col])
+                if dates is not None:
+                    df[col] = dates
+    new_col_types = {col: infer_type(df[col]) for col in df.columns}
+    table, col_types = df, new_col_types
+    apply_types()
+    save_state()
+    record_checkpoint()
 
 
-def _como_datas(serie):
+def _as_dates(series):
     """Converte uma coluna de texto em datas se TODOS os valores forem DD/MM/AAAA; senão None."""
-    validos = serie.dropna()
-    if validos.empty:
+    valid_values = series.dropna()
+    if valid_values.empty:
         return None
     try:
-        pd.to_datetime(validos, format="%d/%m/%Y")
+        pd.to_datetime(valid_values, format="%d/%m/%Y")
     except (ValueError, TypeError):
         return None
-    return pd.to_datetime(serie, format="%d/%m/%Y", errors="coerce")
+    return pd.to_datetime(series, format="%d/%m/%Y", errors="coerce")
 
 
-def _separador_csv(nome, codificacao):
+def _csv_separator(name, file_encoding):
     """Detecta o separador entre os mais comuns; ',' se não for possível (ex.: uma só coluna)."""
-    with open(nome, encoding=codificacao, newline="") as f:
-        amostra = f.read(8192)
+    with open(name, encoding=file_encoding, newline="") as f:
+        random_sample = f.read(8192)
     try:
-        return csv.Sniffer().sniff(amostra, delimiters=",;\t|").delimiter
+        return csv.Sniffer().sniff(random_sample, delimiters=",;\t|").delimiter
     except csv.Error:
         return ","
 
 
-def _numerica_ou_texto(serie):
+def _numeric_or_text(series):
     """Inferência a partir do texto cru: inteiros (com falhas) -> Int64, decimais -> float64, resto -> texto.
 
     Códigos com zeros à esquerda (ex.: 007) ficam como texto para não perder os zeros.
     """
-    serie = serie.str.strip()
-    validos = serie.dropna()
-    if validos.empty or validos.str.contains(r"^[+-]?0\d").any():
-        return serie
-    if validos.str.fullmatch(r"[+-]?\d+(,\d+)?").all() and validos.str.contains(",").any():  # vírgula decimal (Excel PT)
-        serie = serie.str.replace(",", ".", regex=False)
-        validos = serie.dropna()
-    if validos.str.fullmatch(r"[+-]?\d+").all():
-        return pd.to_numeric(serie).astype("Int64")
-    convertida = pd.to_numeric(serie, errors="coerce")
-    if convertida[serie.notna()].notna().all():
-        return convertida
-    return serie
+    series = series.str.strip()
+    valid_values = series.dropna()
+    if valid_values.empty or valid_values.str.contains(r"^[+-]?0\d").any():
+        return series
+    if valid_values.str.fullmatch(r"[+-]?\d+(,\d+)?").all() and valid_values.str.contains(",").any():  # vírgula decimal (Excel PT)
+        series = series.str.replace(",", ".", regex=False)
+        valid_values = series.dropna()
+    if valid_values.str.fullmatch(r"[+-]?\d+").all():
+        return pd.to_numeric(series).astype("Int64")
+    converted = pd.to_numeric(series, errors="coerce")
+    if converted[series.notna()].notna().all():
+        return converted
+    return series
 
 
-def _ler_csv(nome):
+def _read_csv(name):
     """Lê um CSV (UTF-8 ou Latin-1, separador detectado) e infere os tipos das colunas."""
-    for codificacao in ("utf-8-sig", "latin-1"):
+    for file_encoding in ("utf-8-sig", "latin-1"):
         try:
-            sep = _separador_csv(nome, codificacao)
-            cru = pd.read_csv(nome, sep=sep, encoding=codificacao, dtype=str)
+            sep = _csv_separator(name, file_encoding)
+            raw = pd.read_csv(name, sep=sep, encoding=file_encoding, dtype=str)
         except UnicodeDecodeError:
             continue
         except pd.errors.EmptyDataError:
             raise ValueError("o ficheiro está vazio") from None
-        for col in cru.columns:
-            cru[col] = _numerica_ou_texto(cru[col])
-        return cru
+        for col in raw.columns:
+            raw[col] = _numeric_or_text(raw[col])
+        return raw
     raise ValueError("não foi possível descodificar o ficheiro (esperado UTF-8 ou Latin-1)")
 
 
-def importar_csv():
-    cabecalho("IMPORTAR CSV")
+def import_csv():
+    header("IMPORTAR CSV")
     print()
-    if not confirmar_substituir_folha():
+    if not confirm_replace_sheet():
         return
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
 
-    if not nome.endswith(EXT_CSV):
-        nome += EXT_CSV
+    if not name.endswith(EXT_CSV):
+        name += EXT_CSV
 
     try:
-        adoptar_dataframe(_ler_csv(nome), detectar_datas=True)
-        print(f"\n{UI_INDENTACAO_1}'{nome}' importado: {len(tabela)} linhas, {len(tabela.columns)} colunas.")
+        adopt_dataframe(_read_csv(name), detect_dates=True)
+        print(f"\n{UI_INDENT_1}'{name}' importado: {len(table)} linhas, {len(table.columns)} colunas.")
     except FileNotFoundError:
-        print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
+        print(f"\n{UI_INDENT_1}Ficheiro '{name}' não encontrado.")
     except Exception as e:
-        log.exception("Falha em importar_csv")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em import_csv")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def exportar_csv():
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
-        pausar()
+def export_csv():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem dados para exportar.")
+        pause()
         return
 
-    cabecalho("EXPORTAR CSV")
+    header("EXPORTAR CSV")
     print()
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
-    if not nome.endswith(EXT_CSV):
-        nome += EXT_CSV
+    if not name.endswith(EXT_CSV):
+        name += EXT_CSV
 
-    print(f"{UI_INDENTACAO_1}Formato: [1] Internacional (',' e '.')  [2] Excel português (';' e ',')")
-    sep, decimal = (";", ",") if input(f"{UI_INDENTACAO_1}Opção (Enter = 1): ").strip() == "2" else (",", ".")
+    print(f"{UI_INDENT_1}Formato: [1] Internacional (',' e '.')  [2] Excel português (';' e ',')")
+    sep, decimal = (";", ",") if input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() == "2" else (",", ".")
 
     try:
         # utf-8-sig: o Excel reconhece os acentos; datas em DD/MM/AAAA, como na aplicação.
-        tabela.to_csv(nome, index=False, sep=sep, decimal=decimal, encoding="utf-8-sig", date_format="%d/%m/%Y")
-        print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
+        table.to_csv(name, index=False, sep=sep, decimal=decimal, encoding="utf-8-sig", date_format="%d/%m/%Y")
+        print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
-        log.exception("Falha em exportar_csv")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em export_csv")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def exportar_word():
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
-        pausar()
+def export_word():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem dados para exportar.")
+        pause()
         return
 
-    cabecalho("EXPORTAR WORD")
+    header("EXPORTAR WORD")
     print()
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
-    if not nome.endswith(EXT_WORD):
-        nome += EXT_WORD
+    if not name.endswith(EXT_WORD):
+        name += EXT_WORD
 
     try:
         doc = Document()
-        doc.add_heading(f"{NOME_APP} — Relatório", 0)
-        doc.add_paragraph(f"Dimensões: {len(tabela)} linhas × {len(tabela.columns)} colunas")
+        doc.add_heading(f"{APP_NAME} — Relatório", 0)
+        doc.add_paragraph(f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
 
         doc.add_heading("Colunas e tipos", level=1)
-        for col in tabela.columns:
-            doc.add_paragraph(f"• {col}: {NOME_TIPO.get(tipo_de(col), 'texto')}")
+        for col in table.columns:
+            doc.add_paragraph(f"• {col}: {TYPE_NAME.get(type_of(col), 'texto')}")
 
-        if not tabela.empty:
+        if not table.empty:
             doc.add_heading("Dados", level=1)
-            cols = list(tabela.columns)
-            tbl = doc.add_table(rows=1 + len(tabela), cols=len(cols))
+            cols = list(table.columns)
+            tbl = doc.add_table(rows=1 + len(table), cols=len(cols))
             tbl.style = "Table Grid"
             for j, col in enumerate(cols):
                 tbl.rows[0].cells[j].text = str(col)
-            for i, (_, row) in enumerate(tabela.iterrows()):
+            for i, (_, row) in enumerate(table.iterrows()):
                 for j, col in enumerate(cols):
-                    tbl.rows[i + 1].cells[j].text = formatar_valor(row[col])
+                    tbl.rows[i + 1].cells[j].text = format_value(row[col])
 
-        num_cols = tabela.select_dtypes(include="number").columns.tolist()
+        num_cols = table.select_dtypes(include="number").columns.tolist()
         if num_cols:
             doc.add_heading("Estatísticas básicas (colunas numéricas)", level=1)
             for col in num_cols:
-                serie = tabela[col].dropna()
+                series = table[col].dropna()
                 doc.add_paragraph(
-                    f"{col}:  média={formatar_numero(serie.mean())}  "
-                    f"mín={formatar_numero(serie.min())}  "
-                    f"máx={formatar_numero(serie.max())}  "
-                    f"desvio={formatar_numero(serie.std())}  "
-                    f"mediana={formatar_numero(serie.median())}"
+                    f"{col}:  média={format_number(series.mean())}  "
+                    f"mín={format_number(series.min())}  "
+                    f"máx={format_number(series.max())}  "
+                    f"desvio={format_number(series.std())}  "
+                    f"mediana={format_number(series.median())}"
                 )
 
-        doc.save(nome)
-        print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
+        doc.save(name)
+        print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
-        log.exception("Falha em exportar_word")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em export_word")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def _latin1(texto):
+def _latin1(text):
     """Fontes core do PDF só suportam Latin-1: o resto é substituído por '?'."""
-    return str(texto).encode("latin-1", "replace").decode("latin-1")
+    return str(text).encode("latin-1", "replace").decode("latin-1")
 
 
-def _texto_pdf(pdf, texto):
+def _pdf_text(pdf, text):
     """Texto pronto a escrever no PDF: intacto com fonte Unicode, senão reduzido a Latin-1."""
-    return str(texto) if getattr(pdf, "tf_unicode", False) else _latin1(texto)
+    return str(text) if getattr(pdf, "tf_unicode", False) else _latin1(text)
 
 
-def _configurar_fonte_pdf(pdf):
+def _configure_pdf_font(pdf):
     """Devolve o nome da família a usar. Com fpdf2 regista a DejaVu Sans (vem com o matplotlib) para suportar Unicode.
 
     O fpdf antigo (1.7) escreve ficheiros de cache na pasta da fonte, por isso aí mantém-se Helvetica (Latin-1).
@@ -855,9 +855,9 @@ def _configurar_fonte_pdf(pdf):
     try:
         if int(str(getattr(fpdf_lib, "FPDF_VERSION", "1")).split(".")[0]) < 2:
             return "Helvetica"
-        pasta = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
-        pdf.add_font("DejaVu", "", os.path.join(pasta, "DejaVuSans.ttf"))
-        pdf.add_font("DejaVu", "B", os.path.join(pasta, "DejaVuSans-Bold.ttf"))
+        folder = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+        pdf.add_font("DejaVu", "", os.path.join(folder, "DejaVuSans.ttf"))
+        pdf.add_font("DejaVu", "B", os.path.join(folder, "DejaVuSans-Bold.ttf"))
     except Exception:
         log.warning("Fonte Unicode indisponível; o PDF usa Helvetica (Latin-1)", exc_info=True)
         return "Helvetica"
@@ -865,136 +865,136 @@ def _configurar_fonte_pdf(pdf):
     return "DejaVu"
 
 
-def _pdf_linha(pdf, altura, texto, align=""):
+def _pdf_line(pdf, height, text, align=""):
     """Escreve uma linha e avança. Funciona em fpdf e fpdf2 (evita o `ln=True` deprecado)."""
-    pdf.cell(0, altura, _texto_pdf(pdf, texto), align=align)
-    pdf.ln(altura)
+    pdf.cell(0, height, _pdf_text(pdf, text), align=align)
+    pdf.ln(height)
 
 
-def exportar_pdf():
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
-        pausar()
+def export_pdf():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem dados para exportar.")
+        pause()
         return
 
-    cabecalho("EXPORTAR PDF")
+    header("EXPORTAR PDF")
     print()
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
-    if not nome.endswith(EXT_PDF):
-        nome += EXT_PDF
+    if not name.endswith(EXT_PDF):
+        name += EXT_PDF
 
     try:
         pdf = FPDF()
-        familia = _configurar_fonte_pdf(pdf)
+        font_family = _configure_pdf_font(pdf)
         pdf.add_page()
 
         # Título
-        pdf.set_font(familia, "B", 16)
+        pdf.set_font(font_family, "B", 16)
         pdf.set_text_color(16, 41, 230)
-        _pdf_linha(pdf, 10, f"{NOME_APP} - Relatório", align="C")
+        _pdf_line(pdf, 10, f"{APP_NAME} - Relatório", align="C")
 
         # Dimensões
-        pdf.set_font(familia, size=11)
+        pdf.set_font(font_family, size=11)
         pdf.set_text_color(0, 0, 0)
-        _pdf_linha(pdf, 8, f"Dimensões: {len(tabela)} linhas × {len(tabela.columns)} colunas")
+        _pdf_line(pdf, 8, f"Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
 
         # Colunas e tipos
         pdf.ln(3)
-        pdf.set_font(familia, "B", 12)
+        pdf.set_font(font_family, "B", 12)
         pdf.set_text_color(14, 122, 230)
-        _pdf_linha(pdf, 8, "Colunas e tipos")
-        pdf.set_font(familia, size=10)
+        _pdf_line(pdf, 8, "Colunas e tipos")
+        pdf.set_font(font_family, size=10)
         pdf.set_text_color(0, 0, 0)
-        for col in tabela.columns:
-            nome_tipo = NOME_TIPO.get(tipo_de(col), "texto")
-            _pdf_linha(pdf, 7, f"  {col}: {nome_tipo}")
+        for col in table.columns:
+            type_label = TYPE_NAME.get(type_of(col), "texto")
+            _pdf_line(pdf, 7, f"  {col}: {type_label}")
 
         # Dados
-        if not tabela.empty:
+        if not table.empty:
             pdf.ln(3)
-            pdf.set_font(familia, "B", 12)
+            pdf.set_font(font_family, "B", 12)
             pdf.set_text_color(14, 122, 230)
-            _pdf_linha(pdf, 8, "Dados")
+            _pdf_line(pdf, 8, "Dados")
             pdf.set_text_color(0, 0, 0)
 
-            cols = list(tabela.columns)
+            cols = list(table.columns)
             col_w = min(35, (pdf.w - 20) / len(cols))
-            pdf.set_font(familia, "B", 8)
+            pdf.set_font(font_family, "B", 8)
             for col in cols:
-                pdf.cell(col_w, 7, _texto_pdf(pdf, str(col)[:14]), border=1)
+                pdf.cell(col_w, 7, _pdf_text(pdf, str(col)[:14]), border=1)
             pdf.ln()
-            pdf.set_font(familia, size=8)
-            for _, row in tabela.iterrows():
+            pdf.set_font(font_family, size=8)
+            for _, row in table.iterrows():
                 for col in cols:
-                    pdf.cell(col_w, 6, _texto_pdf(pdf, str(formatar_valor(row[col]))[:14]), border=1)
+                    pdf.cell(col_w, 6, _pdf_text(pdf, str(format_value(row[col]))[:14]), border=1)
                 pdf.ln()
 
         # Estatísticas
-        num_cols = tabela.select_dtypes(include="number").columns.tolist()
+        num_cols = table.select_dtypes(include="number").columns.tolist()
         if num_cols:
             pdf.ln(3)
-            pdf.set_font(familia, "B", 12)
+            pdf.set_font(font_family, "B", 12)
             pdf.set_text_color(14, 122, 230)
-            _pdf_linha(pdf, 8, "Estatísticas básicas (colunas numéricas)")
-            pdf.set_font(familia, size=10)
+            _pdf_line(pdf, 8, "Estatísticas básicas (colunas numéricas)")
+            pdf.set_font(font_family, size=10)
             pdf.set_text_color(0, 0, 0)
             for col in num_cols:
-                serie = tabela[col].dropna()
-                linha = (
-                    f"{col}: média={formatar_numero(serie.mean())}  "
-                    f"mín={formatar_numero(serie.min())}  "
-                    f"máx={formatar_numero(serie.max())}  "
-                    f"desvio={formatar_numero(serie.std())}  "
-                    f"mediana={formatar_numero(serie.median())}"
+                series = table[col].dropna()
+                line = (
+                    f"{col}: média={format_number(series.mean())}  "
+                    f"mín={format_number(series.min())}  "
+                    f"máx={format_number(series.max())}  "
+                    f"desvio={format_number(series.std())}  "
+                    f"mediana={format_number(series.median())}"
                 )
-                _pdf_linha(pdf, 7, linha)
+                _pdf_line(pdf, 7, line)
 
-        pdf.output(nome)
-        print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
+        pdf.output(name)
+        print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
-        log.exception("Falha em exportar_pdf")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em export_pdf")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def exportar():
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
-        pausar()
+def export_excel():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem dados para exportar.")
+        pause()
         return
 
-    cabecalho("EXPORTAR EXCEL")
+    header("EXPORTAR EXCEL")
     print()
-    nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
-    if not nome:
+    name = input(f"{UI_INDENT_1}Nome do ficheiro (sem extensão): ").strip()
+    if not name:
         return
 
-    if not nome.endswith(EXT_EXCEL):
-        nome += EXT_EXCEL
+    if not name.endswith(EXT_EXCEL):
+        name += EXT_EXCEL
 
     try:
-        tabela.to_excel(nome, index=False)
-        print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
+        table.to_excel(name, index=False)
+        print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
-        log.exception("Falha em exportar")
-        print(f"\n{UI_INDENTACAO_1}Erro: {e}")
-    pausar()
+        log.exception("Falha em export_excel")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
 
 
-def criar_folha_dummy():
-    global tabela, tipos
+def create_dummy_sheet():
+    global table, col_types
 
-    cabecalho("CRIAR FOLHA DUMMY")
+    header("CRIAR FOLHA DUMMY")
     print()
-    if not tabela.columns.empty:
-        if not confirmar("Folha actual será substituída. Continuar?"):
-            print(f"\n{UI_INDENTACAO_1}  Operação cancelada.")
-            pausar()
+    if not table.columns.empty:
+        if not confirm("Folha actual será substituída. Continuar?"):
+            print(f"\n{UI_INDENT_1}  Operação cancelada.")
+            pause()
             return
 
-    tabela = pd.DataFrame({
+    table = pd.DataFrame({
         "Nome": ["João", "Maria", "Pedro", "Ana", "Carlos", "Sofia", "João", "Rita"],
         "Idade": [25, 30, 35, None, 45, 28, 25, 33],
         "Salario": [1500.50, 2000.00, 1800.75, 2200.00, 3500.00, 1700.25, 1500.50, 1950.00],
@@ -1004,533 +1004,533 @@ def criar_folha_dummy():
             "30/05/2017", "14/02/2022", "15/01/2020", "25/09/2019"
         ], format="%d/%m/%Y"),
     })
-    tipos = {"Nome": str, "Idade": int, "Salario": float, "Cidade": str, "Admissao": TIPO_DATA}
-    aplicar_tipos()
-    guardar_estado()
-    registar_ponto()
+    col_types = {"Nome": str, "Idade": int, "Salario": float, "Cidade": str, "Admissao": DATE_TYPE}
+    apply_types()
+    save_state()
+    record_checkpoint()
 
-    print(f"\n{UI_INDENTACAO_1}Folha dummy criada: 8 linhas | 5 colunas")
-    print(f"{UI_INDENTACAO_1}Inclui:")
-    print(f"{UI_INDENTACAO_2}• Tipos variados: texto, inteiro, decimal, data")
-    print(f"{UI_INDENTACAO_2}• 1 valor em falta na coluna 'Idade'")
-    print(f"{UI_INDENTACAO_2}• 1 linha duplicada (João, 25, Lisboa)")
-    print(f"{UI_INDENTACAO_2}• Cidades repetidas (ideal para 'groupby')")
-    pausar()
+    print(f"\n{UI_INDENT_1}Folha dummy criada: 8 linhas | 5 colunas")
+    print(f"{UI_INDENT_1}Inclui:")
+    print(f"{UI_INDENT_2}• Tipos variados: texto, inteiro, decimal, data")
+    print(f"{UI_INDENT_2}• 1 valor em falta na coluna 'Idade'")
+    print(f"{UI_INDENT_2}• 1 linha duplicada (João, 25, Lisboa)")
+    print(f"{UI_INDENT_2}• Cidades repetidas (ideal para 'groupby')")
+    pause()
 
 
-def limpar_folha():
-    global tabela, tipos
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Folha já está vazia.")
-        pausar()
+def clear_sheet():
+    global table, col_types
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Folha já está vazia.")
+        pause()
         return
 
-    cabecalho("LIMPAR FOLHA")
+    header("LIMPAR FOLHA")
     print()
-    if not confirmar("Confirma apagar toda a folha actual (perdem-se dados)?"):
-        print(f"\n{UI_INDENTACAO_1}  Operação cancelada.")
-        pausar()
+    if not confirm("Confirma apagar toda a folha actual (perdem-se dados)?"):
+        print(f"\n{UI_INDENT_1}  Operação cancelada.")
+        pause()
         return
 
-    tabela = pd.DataFrame()
-    tipos = {}
+    table = pd.DataFrame()
+    col_types = {}
     try:
-        if os.path.exists(FICHEIRO_ESTADO):
-            os.remove(FICHEIRO_ESTADO)
+        if os.path.exists(STATE_FILE):
+            os.remove(STATE_FILE)
     except Exception:
         pass
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Folha limpa.")
-    pausar()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Folha limpa.")
+    pause()
 
 
 # Operações sobre linhas: adicionar, editar célula, remover
-def adicionar_linha():
-    global tabela
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Crie uma folha primeiro.")
-        pausar()
+def add_row():
+    global table
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
         return
 
-    cabecalho("ADICIONAR LINHA")
-    print(f"{UI_INDENTACAO_1}('sair' em qualquer campo para terminar a introdução de linhas)\n")
+    header("ADICIONAR LINHA")
+    print(f"{UI_INDENT_1}('sair' em qualquer campo para terminar a introdução de linhas)\n")
 
-    linhas_adicionadas = 0
+    rows_added = 0
 
     while True:
-        nova_linha = {}
-        cancelar = False
+        new_row = {}
+        cancelled = False
 
-        for col in tabela.columns:
-            tipo = tipo_de(col)
-            nome_tipo = NOME_TIPO.get(tipo, "texto")
+        for col in table.columns:
+            col_type = type_of(col)
+            type_label = TYPE_NAME.get(col_type, "texto")
             while True:
-                val = input(f"{UI_INDENTACAO_1}{col} ({nome_tipo}): ").strip()
+                val = input(f"{UI_INDENT_1}{col} ({type_label}): ").strip()
                 if val.lower() == "sair":
-                    cancelar = True
+                    cancelled = True
                     break
                 try:
-                    nova_linha[col] = converter(val, tipo)
+                    new_row[col] = convert_value(val, col_type)
                     break
                 except Exception:
-                    print(f"{UI_INDENTACAO_1}Valor inválido para {nome_tipo}.")
-            if cancelar:
+                    print(f"{UI_INDENT_1}Valor inválido para {type_label}.")
+            if cancelled:
                 break
 
-        if cancelar:
+        if cancelled:
             break
 
-        nova = pd.DataFrame([nova_linha])
-        tabela = pd.concat([tabela, nova], ignore_index=True)
-        aplicar_tipos()
-        guardar_estado()
-        registar_ponto()
-        linhas_adicionadas += 1
-        print(f"\n{UI_INDENTACAO_1}Linha adicionada. (total introduzido: {linhas_adicionadas})\n")
+        new_df = pd.DataFrame([new_row])
+        table = pd.concat([table, new_df], ignore_index=True)
+        apply_types()
+        save_state()
+        record_checkpoint()
+        rows_added += 1
+        print(f"\n{UI_INDENT_1}Linha adicionada. (total introduzido: {rows_added})\n")
 
-    if linhas_adicionadas > 0:
-        print(f"\n{UI_INDENTACAO_1}{linhas_adicionadas} linha(s) adicionada(s) com sucesso.")
+    if rows_added > 0:
+        print(f"\n{UI_INDENT_1}{rows_added} linha(s) adicionada(s) com sucesso.")
     else:
-        print(f"\n{UI_INDENTACAO_1}Nenhuma linha adicionada.")
-    pausar()
+        print(f"\n{UI_INDENT_1}Nenhuma linha adicionada.")
+    pause()
 
 
-def editar_celula():
-    global tabela
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para editar.")
-        pausar()
+def edit_cell():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados para editar.")
+        pause()
         return
 
-    cabecalho("EDITAR CÉLULA")
-    print(f"{UI_INDENTACAO_1}('sair' em qualquer campo para cancelar)\n")
+    header("EDITAR CÉLULA")
+    print(f"{UI_INDENT_1}('sair' em qualquer campo para cancelar)\n")
 
-    idx_input = input(f"{UI_INDENTACAO_1}Índice da linha: ").strip()
-    if idx_input.lower() == "sair":
-        print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-        pausar()
+    index_text = input(f"{UI_INDENT_1}Índice da linha: ").strip()
+    if index_text.lower() == "sair":
+        print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
         return
     try:
-        idx = int(idx_input)
+        idx = int(index_text)
     except ValueError:
-        print(f"{UI_INDENTACAO_1}Índice deve ser inteiro.")
-        pausar()
+        print(f"{UI_INDENT_1}Índice deve ser inteiro.")
+        pause()
         return
 
-    if idx not in tabela.index:
-        print(f"{UI_INDENTACAO_1}Índice inválido.")
-        pausar()
+    if idx not in table.index:
+        print(f"{UI_INDENT_1}Índice inválido.")
+        pause()
         return
 
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
-    col_input = input(f"{UI_INDENTACAO_1}Coluna: ").strip()
-    if col_input.lower() == "sair":
-        print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-        pausar()
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    col_text = input(f"{UI_INDENT_1}Coluna: ").strip()
+    if col_text.lower() == "sair":
+        print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
         return
-    col = resolver_coluna(col_input)
+    col = resolve_column(col_text)
     if col is None:
-        print(f"{UI_INDENTACAO_1}Coluna não existe.")
-        pausar()
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
         return
 
-    tipo = tipo_de(col)
-    atual = tabela.at[idx, col]
-    print(f"{UI_INDENTACAO_1}Valor atual: {formatar_valor(atual)}")
+    col_type = type_of(col)
+    current = table.at[idx, col]
+    print(f"{UI_INDENT_1}Valor atual: {format_value(current)}")
 
     while True:
-        novo = input(f"{UI_INDENTACAO_1}Novo valor: ").strip()
-        if novo.lower() == "sair":
-            print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-            pausar()
+        loaded = input(f"{UI_INDENT_1}Novo valor: ").strip()
+        if loaded.lower() == "sair":
+            print(f"\n{UI_INDENT_1}Operação cancelada.")
+            pause()
             return
         try:
-            tabela.at[idx, col] = converter(novo, tipo)
+            table.at[idx, col] = convert_value(loaded, col_type)
             break
         except Exception:
-            print(f"{UI_INDENTACAO_1}Valor inválido.")
+            print(f"{UI_INDENT_1}Valor inválido.")
 
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Célula atualizada.")
-    pausar()
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Célula atualizada.")
+    pause()
 
 
-def remover_linha():
-    global tabela
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem linhas para remover.")
-        pausar()
+def remove_row():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem linhas para remover.")
+        pause()
         return
 
-    cabecalho("REMOVER LINHA")
+    header("REMOVER LINHA")
     print()
 
     try:
-        idx = int(input(f"{UI_INDENTACAO_1}Índice da linha a remover: ").strip())
+        idx = int(input(f"{UI_INDENT_1}Índice da linha a remover: ").strip())
     except ValueError:
-        print(f"{UI_INDENTACAO_1}Índice deve ser inteiro.")
-        pausar()
+        print(f"{UI_INDENT_1}Índice deve ser inteiro.")
+        pause()
         return
 
-    if idx not in tabela.index:
-        print(f"{UI_INDENTACAO_1}Índice inválido.")
-        pausar()
+    if idx not in table.index:
+        print(f"{UI_INDENT_1}Índice inválido.")
+        pause()
         return
 
     print()
-    desenhar_tabela_dados(tabela.loc[[idx]])
+    draw_data_table(table.loc[[idx]])
     print()
-    if not confirmar(f"Confirma remover linha {idx}?"):
-        print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-        pausar()
+    if not confirm(f"Confirma remover linha {idx}?"):
+        print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
         return
 
-    tabela = tabela.drop(index=idx).reset_index(drop=True)
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Linha {idx} removida.")
-    pausar()
+    table = table.drop(index=idx).reset_index(drop=True)
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Linha {idx} removida.")
+    pause()
 
 
 # Operações sobre colunas: adicionar, remover, renomear
-def adicionar_coluna():
-    global tabela, tipos
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Crie uma folha primeiro.")
-        pausar()
+def add_column():
+    global table, col_types
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
         return
 
-    cabecalho("ADICIONAR COLUNA")
-    print(f"{UI_INDENTACAO_1}('sair' para cancelar)\n")
+    header("ADICIONAR COLUNA")
+    print(f"{UI_INDENT_1}('sair' para cancelar)\n")
 
-    nome = input(f"{UI_INDENTACAO_1}Nome da nova coluna: ").strip()
-    if not nome or nome.lower() == "sair":
+    name = input(f"{UI_INDENT_1}Nome da nova coluna: ").strip()
+    if not name or name.lower() == "sair":
         return
-    if resolver_coluna(nome) is not None:
-        print(f"{UI_INDENTACAO_1}Coluna '{nome}' já existe. Por favor escolha um nome diferente.")
-        pausar()
-        return
-
-    tipo = pedir_tipo()
-    tipos[nome] = tipo
-    nome_tipo = NOME_TIPO.get(tipo, "texto")
-
-    if tabela.empty:
-        tabela[nome] = pd.Series(dtype=object)
-        aplicar_tipos()
-        guardar_estado()
-        registar_ponto()
-        print(f"\n{UI_INDENTACAO_1}Coluna '{nome}' adicionada.")
-        pausar()
+    if resolve_column(name) is not None:
+        print(f"{UI_INDENT_1}Coluna '{name}' já existe. Por favor escolha um nome diferente.")
+        pause()
         return
 
-    valores = []
-    for idx in tabela.index:
+    col_type = ask_type()
+    col_types[name] = col_type
+    type_label = TYPE_NAME.get(col_type, "texto")
+
+    if table.empty:
+        table[name] = pd.Series(dtype=object)
+        apply_types()
+        save_state()
+        record_checkpoint()
+        print(f"\n{UI_INDENT_1}Coluna '{name}' adicionada.")
+        pause()
+        return
+
+    values = []
+    for idx in table.index:
         while True:
-            val = input(f"{UI_INDENTACAO_1}Valor para linha {idx} ({nome_tipo}) ('sair' cancela, Enter = em branco): ").strip()
+            val = input(f"{UI_INDENT_1}Valor para linha {idx} ({type_label}) ('sair' cancela, Enter = em branco): ").strip()
             if val.lower() == "sair":
-                tipos.pop(nome, None)
-                print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-                pausar()
+                col_types.pop(name, None)
+                print(f"\n{UI_INDENT_1}Operação cancelada.")
+                pause()
                 return
             if not val:
-                valores.append(None)  # em branco = valor em falta (apresentado como "--")
+                values.append(None)  # em branco = valor em falta (apresentado como "--")
                 break
             try:
-                valores.append(converter(val, tipo))
+                values.append(convert_value(val, col_type))
                 break
             except Exception:
-                print(f"{UI_INDENTACAO_1}Valor inválido para {nome_tipo}.")
+                print(f"{UI_INDENT_1}Valor inválido para {type_label}.")
 
-    tabela[nome] = valores
-    aplicar_tipos()
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Coluna '{nome}' adicionada.")
-    pausar()
+    table[name] = values
+    apply_types()
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Coluna '{name}' adicionada.")
+    pause()
 
 
-def remover_coluna():
-    global tabela, tipos
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem colunas para remover.")
-        pausar()
+def remove_column():
+    global table, col_types
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem colunas para remover.")
+        pause()
         return
 
-    cabecalho("REMOVER COLUNA")
+    header("REMOVER COLUNA")
     print()
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
-    nome = resolver_coluna(input(f"{UI_INDENTACAO_1}Coluna a remover: ").strip())
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    name = resolve_column(input(f"{UI_INDENT_1}Coluna a remover: ").strip())
 
-    if nome is None:
-        print(f"{UI_INDENTACAO_1}Coluna não existe.")
-        pausar()
+    if name is None:
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
         return
 
-    if not confirmar(f"Confirma remover coluna '{nome}'?"):
-        print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-        pausar()
+    if not confirm(f"Confirma remover coluna '{name}'?"):
+        print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
         return
 
-    tabela = tabela.drop(columns=[nome])
-    tipos.pop(nome, None)
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}Coluna '{nome}' removida.")
-    pausar()
+    table = table.drop(columns=[name])
+    col_types.pop(name, None)
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}Coluna '{name}' removida.")
+    pause()
 
 
-def renomear_coluna():
-    global tabela, tipos
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem colunas para renomear.")
-        pausar()
+def rename_column():
+    global table, col_types
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem colunas para renomear.")
+        pause()
         return
 
-    cabecalho("RENOMEAR COLUNA")
+    header("RENOMEAR COLUNA")
     print()
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
-    nome = resolver_coluna(input(f"{UI_INDENTACAO_1}Coluna a renomear: ").strip())
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    name = resolve_column(input(f"{UI_INDENT_1}Coluna a renomear: ").strip())
 
-    if nome is None:
-        print(f"{UI_INDENTACAO_1}Coluna não existe.")
-        pausar()
+    if name is None:
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
         return
 
     while True:
-        novo_nome = input(f"{UI_INDENTACAO_1}Novo nome ('sair' para cancelar): ").strip()
-        if novo_nome.lower() == "sair":
-            print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-            pausar()
+        new_name = input(f"{UI_INDENT_1}Novo nome ('sair' para cancelar): ").strip()
+        if new_name.lower() == "sair":
+            print(f"\n{UI_INDENT_1}Operação cancelada.")
+            pause()
             return
-        if not novo_nome:
-            print(f"{UI_INDENTACAO_1}Nome não pode ser vazio.")
-        elif resolver_coluna(novo_nome) is not None:
-            print(f"{UI_INDENTACAO_1}Já existe uma coluna com esse nome.")
+        if not new_name:
+            print(f"{UI_INDENT_1}Nome não pode ser vazio.")
+        elif resolve_column(new_name) is not None:
+            print(f"{UI_INDENT_1}Já existe uma coluna com esse nome.")
         else:
             break
 
-    tabela = tabela.rename(columns={nome: novo_nome})
-    if nome in tipos:
-        tipos[novo_nome] = tipos.pop(nome)
-    guardar_estado()
-    registar_ponto()
-    print(f"\n{UI_INDENTACAO_1}'{nome}' renomeada para '{novo_nome}'.")
-    pausar()
+    table = table.rename(columns={name: new_name})
+    if name in col_types:
+        col_types[new_name] = col_types.pop(name)
+    save_state()
+    record_checkpoint()
+    print(f"\n{UI_INDENT_1}'{name}' renomeada para '{new_name}'.")
+    pause()
 
 
 # Análise básica: ordenar, filtrar (numérico/data/texto), ver início/fim, amostra
-def ordenar():
-    global tabela
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para ordenar.")
-        pausar()
+def sort_rows():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados para ordenar.")
+        pause()
         return
 
-    cabecalho("ORDENAR")
-    print(f"{UI_INDENTACAO_1}Adicione colunas em sequência ('sair' para terminar)\n")
-    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}\n")
+    header("ORDENAR")
+    print(f"{UI_INDENT_1}Adicione colunas em sequência ('sair' para terminar)\n")
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}\n")
 
-    cols_ord = []
-    asc_ord = []
+    sort_cols = []
+    asc_order = []
 
     while True:
-        valor = input(f"{UI_INDENTACAO_1}Coluna {len(cols_ord) + 1}: ").strip()
-        if valor.lower() == "sair":
-            if not cols_ord:
-                print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
-                pausar()
+        value = input(f"{UI_INDENT_1}Coluna {len(sort_cols) + 1}: ").strip()
+        if value.lower() == "sair":
+            if not sort_cols:
+                print(f"\n{UI_INDENT_1}Operação cancelada.")
+                pause()
                 return
             break
-        if not valor:
-            if not cols_ord:
+        if not value:
+            if not sort_cols:
                 continue
             break
-        col = resolver_coluna(valor)
+        col = resolve_column(value)
         if col is None:
-            print(f"{UI_INDENTACAO_1}Coluna não existe.")
+            print(f"{UI_INDENT_1}Coluna não existe.")
             continue
-        if col in cols_ord:
-            print(f"{UI_INDENTACAO_1}Coluna já adicionada.")
+        if col in sort_cols:
+            print(f"{UI_INDENT_1}Coluna já adicionada.")
             continue
-        direccao = input(f"{UI_INDENTACAO_2}Direcção [A]scendente / [D]escendente: ").strip().upper()
-        cols_ord.append(col)
-        asc_ord.append(direccao != "D")
+        direction = input(f"{UI_INDENT_2}Direcção [A]scendente / [D]escendente: ").strip().upper()
+        sort_cols.append(col)
+        asc_order.append(direction != "D")
 
-    tabela = tabela.sort_values(by=cols_ord, ascending=asc_ord, ignore_index=True)
-    guardar_estado()
-    registar_ponto()
+    table = table.sort_values(by=sort_cols, ascending=asc_order, ignore_index=True)
+    save_state()
+    record_checkpoint()
 
-    descr = ", ".join(f"{c} ({'asc' if a else 'desc'})" for c, a in zip(cols_ord, asc_ord, strict=True))
-    print(f"\n{UI_INDENTACAO_1}Ordenado por: {descr}")
-    pausar()
+    description = ", ".join(f"{c} ({'asc' if a else 'desc'})" for c, a in zip(sort_cols, asc_order, strict=True))
+    print(f"\n{UI_INDENT_1}Ordenado por: {description}")
+    pause()
 
 
-def filtro_numerico(col):
+def filter_numeric(col):
     print()
-    print(f"{UI_INDENTACAO_1}Operador: [1] ==  [2] >  [3] <  [4] >=  [5] <=  [6] intervalo [min,max]")
-    op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Operador: [1] ==  [2] >  [3] <  [4] >=  [5] <=  [6] intervalo [min,max]")
+    op = input(f"{UI_INDENT_1}Opção: ").strip()
     try:
         if op == "6":
-            mn = float(input(f"{UI_INDENTACAO_1}Mínimo: ").strip())
-            mx = float(input(f"{UI_INDENTACAO_1}Máximo: ").strip())
-            return tabela[tabela[col].between(mn, mx)]
-        val = float(input(f"{UI_INDENTACAO_1}Valor: ").strip())
+            mn = float(input(f"{UI_INDENT_1}Mínimo: ").strip())
+            mx = float(input(f"{UI_INDENT_1}Máximo: ").strip())
+            return table[table[col].between(mn, mx)]
+        val = float(input(f"{UI_INDENT_1}Valor: ").strip())
         if op == "1":
-            return tabela[tabela[col] == val]
+            return table[table[col] == val]
         elif op == "2":
-            return tabela[tabela[col] > val]
+            return table[table[col] > val]
         elif op == "3":
-            return tabela[tabela[col] < val]
+            return table[table[col] < val]
         elif op == "4":
-            return tabela[tabela[col] >= val]
+            return table[table[col] >= val]
         elif op == "5":
-            return tabela[tabela[col] <= val]
-        print(f"{UI_INDENTACAO_1}Operador inválido.")
-        pausar()
+            return table[table[col] <= val]
+        print(f"{UI_INDENT_1}Operador inválido.")
+        pause()
         return None
     except ValueError:
-        print(f"{UI_INDENTACAO_1}Valor inválido.")
-        pausar()
+        print(f"{UI_INDENT_1}Valor inválido.")
+        pause()
         return None
 
 
-def filtro_data(col):
+def filter_date(col):
     print()
-    print(f"{UI_INDENTACAO_1}Operador: [1] Antes de  [2] Depois de  [3] Entre duas datas")
-    op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Operador: [1] Antes de  [2] Depois de  [3] Entre duas datas")
+    op = input(f"{UI_INDENT_1}Opção: ").strip()
     try:
         if op == "3":
-            d1 = pd.to_datetime(input(f"{UI_INDENTACAO_1}De (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
-            d2 = pd.to_datetime(input(f"{UI_INDENTACAO_1}Até (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
-            return tabela[(tabela[col] >= d1) & (tabela[col] <= d2)]
-        d = pd.to_datetime(input(f"{UI_INDENTACAO_1}Data (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
+            d1 = pd.to_datetime(input(f"{UI_INDENT_1}De (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
+            d2 = pd.to_datetime(input(f"{UI_INDENT_1}Até (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
+            return table[(table[col] >= d1) & (table[col] <= d2)]
+        d = pd.to_datetime(input(f"{UI_INDENT_1}Data (DD/MM/AAAA): ").strip(), format="%d/%m/%Y")
         if op == "1":
-            return tabela[tabela[col] < d]
+            return table[table[col] < d]
         elif op == "2":
-            return tabela[tabela[col] > d]
-        print(f"{UI_INDENTACAO_1}Operador inválido.")
-        pausar()
+            return table[table[col] > d]
+        print(f"{UI_INDENT_1}Operador inválido.")
+        pause()
         return None
     except Exception:
-        print(f"{UI_INDENTACAO_1}Data inválida.")
-        pausar()
+        print(f"{UI_INDENT_1}Data inválida.")
+        pause()
         return None
 
 
-def filtro_texto(col):
+def filter_text(col):
     print()
-    print(f"{UI_INDENTACAO_1}Operador: [1] Contém  [2] Igual a  [3] Começa com  [4] Termina com")
-    op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Operador: [1] Contém  [2] Igual a  [3] Começa com  [4] Termina com")
+    op = input(f"{UI_INDENT_1}Opção: ").strip()
     if op not in ("1", "2", "3", "4"):
-        print(f"{UI_INDENTACAO_1}Operador inválido.")
-        pausar()
+        print(f"{UI_INDENT_1}Operador inválido.")
+        pause()
         return None
-    termo = input(f"{UI_INDENTACAO_1}Termo: ").strip()
-    serie = tabela[col].astype(str)
-    termo_lower = termo.lower()
+    term = input(f"{UI_INDENT_1}Termo: ").strip()
+    series = table[col].astype(str)
+    term_lower = term.lower()
     if op == "2":
-        return tabela[serie.str.lower() == termo_lower]
+        return table[series.str.lower() == term_lower]
     elif op == "3":
-        return tabela[serie.str.lower().str.startswith(termo_lower, na=False)]
+        return table[series.str.lower().str.startswith(term_lower, na=False)]
     elif op == "4":
-        return tabela[serie.str.lower().str.endswith(termo_lower, na=False)]
-    return tabela[serie.str.contains(termo, case=False, na=False, regex=False)]
+        return table[series.str.lower().str.endswith(term_lower, na=False)]
+    return table[series.str.contains(term, case=False, na=False, regex=False)]
 
 
-def filtrar():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados para filtrar.")
-        pausar()
+def filter_rows():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados para filtrar.")
+        pause()
         return
 
-    cabecalho("FILTRAR / PESQUISAR")
+    header("FILTRAR / PESQUISAR")
     print()
-    col = pedir_coluna("Coluna a filtrar")
+    col = ask_column("Coluna a filtrar")
     if col is None:
         return
 
-    serie = tabela[col]
-    if pd.api.types.is_numeric_dtype(serie):
-        resultado = filtro_numerico(col)
-    elif pd.api.types.is_datetime64_any_dtype(serie):
-        resultado = filtro_data(col)
+    series = table[col]
+    if pd.api.types.is_numeric_dtype(series):
+        result = filter_numeric(col)
+    elif pd.api.types.is_datetime64_any_dtype(series):
+        result = filter_date(col)
     else:
-        resultado = filtro_texto(col)
+        result = filter_text(col)
 
-    if resultado is None:
-        print(f"{UI_INDENTACAO_1}Filtro inválido ou cancelado.")
-        pausar()
+    if result is None:
+        print(f"{UI_INDENT_1}Filtro inválido ou cancelado.")
+        pause()
         return
 
     print()
-    if resultado.empty:
-        print(f"{UI_INDENTACAO_1}Nenhum resultado encontrado.")
+    if result.empty:
+        print(f"{UI_INDENT_1}Nenhum resultado encontrado.")
     else:
-        print(f"{UI_INDENTACAO_1}{len(resultado)} resultado(s) em '{col}':\n")
-        desenhar_tabela_dados(resultado)
-    pausar()
+        print(f"{UI_INDENT_1}{len(result)} resultado(s) em '{col}':\n")
+        draw_data_table(result)
+    pause()
 
 
-def ver_inicio_fim():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def view_head_tail():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    cabecalho("INÍCIO / FIM")
+    header("INÍCIO / FIM")
     print()
-    print(f"{UI_INDENTACAO_1}Mostra as primeiras ou últimas N linhas da tabela.")
+    print(f"{UI_INDENT_1}Mostra as primeiras ou últimas N linhas da tabela.")
     print()
-    n_input = input(f"{UI_INDENTACAO_1}N — nº de linhas a mostrar (Enter = 5): ").strip()
+    n_text = input(f"{UI_INDENT_1}N — nº de linhas a mostrar (Enter = 5): ").strip()
     try:
-        n = int(n_input) if n_input else 5
+        n = int(n_text) if n_text else 5
         if n <= 0:
             raise ValueError
     except ValueError:
         n = 5
 
-    modo = input(f"{UI_INDENTACAO_1}[I] Início  [F] Fim: ").strip().upper()
-    if modo == "F":
-        print(f"\n{UI_INDENTACAO_1}Últimas {n} linhas:\n")
-        desenhar_tabela_dados(tabela.tail(n))
+    view_mode = input(f"{UI_INDENT_1}[I] Início  [F] Fim: ").strip().upper()
+    if view_mode == "F":
+        print(f"\n{UI_INDENT_1}Últimas {n} linhas:\n")
+        draw_data_table(table.tail(n))
     else:
-        print(f"\n{UI_INDENTACAO_1}Primeiras {n} linhas:\n")
-        desenhar_tabela_dados(tabela.head(n))
-    pausar()
+        print(f"\n{UI_INDENT_1}Primeiras {n} linhas:\n")
+        draw_data_table(table.head(n))
+    pause()
 
 
-def amostra():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def random_sample():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    cabecalho("AMOSTRA ALEATÓRIA")
+    header("AMOSTRA ALEATÓRIA")
     print()
-    n_input = input(f"{UI_INDENTACAO_1}Tamanho: nº de linhas (1-{len(tabela)}) ou percentagem, ex. 20% (Enter = 5): ").strip()
+    n_text = input(f"{UI_INDENT_1}Tamanho: nº de linhas (1-{len(table)}) ou percentagem, ex. 20% (Enter = 5): ").strip()
     try:
-        if n_input.endswith("%"):
-            pct = float(n_input[:-1])
+        if n_text.endswith("%"):
+            pct = float(n_text[:-1])
             if pct <= 0 or pct > 100:
                 raise ValueError
-            n = max(1, round(len(tabela) * pct / 100))
+            n = max(1, round(len(table) * pct / 100))
         else:
-            n = int(n_input) if n_input else 5
-            if n <= 0 or n > len(tabela):
+            n = int(n_text) if n_text else 5
+            if n <= 0 or n > len(table):
                 raise ValueError
     except ValueError:
-        n = min(5, len(tabela))
+        n = min(5, len(table))
 
-    resultado = tabela.sample(n=n)
-    print(f"\n{UI_INDENTACAO_1} Amostra aleatória de {n} linha(s):\n")
-    desenhar_tabela_dados(resultado)
-    pausar()
+    result = table.sample(n=n)
+    print(f"\n{UI_INDENT_1} Amostra aleatória de {n} linha(s):\n")
+    draw_data_table(result)
+    pause()
 
 
 # Estatísticas: etiquetas, métodos individuais e menu
-ETIQUETAS_ESTAT = {
+STAT_LABELS = {
     "count":  "Nº de valores",
     "mean":   "Média",
     "std":    "Desvio padrão",
@@ -1547,407 +1547,407 @@ ETIQUETAS_ESTAT = {
 }
 
 
-def _resumo_todas_numericas():
-    numericas = tabela.select_dtypes(include="number")
-    if numericas.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem colunas numéricas.")
-        pausar()
+def _summary_all_numeric():
+    numeric_df = table.select_dtypes(include="number")
+    if numeric_df.columns.empty:
+        print(f"{UI_INDENT_1}Sem colunas numéricas.")
+        pause()
         return
-    desc = numericas.describe()
-    larg = {c: max(len(str(c)), 10) for c in desc.columns}
+    desc = numeric_df.describe()
+    widths = {c: max(len(str(c)), 10) for c in desc.columns}
     print()
-    print(f"{UI_INDENTACAO_1}Resumo estatístico de todas as colunas numéricas:\n")
-    print(UI_INDENTACAO_2 + " " * 22 + " " + " ".join(str(c).rjust(larg[c]) for c in desc.columns))
+    print(f"{UI_INDENT_1}Resumo estatístico de todas as colunas numéricas:\n")
+    print(UI_INDENT_2 + " " * 22 + " " + " ".join(str(c).rjust(widths[c]) for c in desc.columns))
     for stat in desc.index:
-        celulas = " ".join(formatar_numero(float(desc.at[stat, c])).rjust(larg[c]) for c in desc.columns)
-        print(UI_INDENTACAO_2 + ETIQUETAS_ESTAT.get(stat, stat).ljust(22) + " " + celulas)
-    pausar()
+        cells = " ".join(format_number(float(desc.at[stat, c])).rjust(widths[c]) for c in desc.columns)
+        print(UI_INDENT_2 + STAT_LABELS.get(stat, stat).ljust(22) + " " + cells)
+    pause()
 
 
-def estat_resumo():
-    col = pedir_coluna_ou_todas()
+def stat_summary():
+    col = ask_column_or_all()
     if col is None:
         return
-    if col is _TODAS:
-        _resumo_todas_numericas()
+    if col is _ALL:
+        _summary_all_numeric()
         return
 
-    desc = tabela[col].describe()
-    tipo_col = "numérica" if pd.api.types.is_numeric_dtype(tabela[col]) else (
-        "data" if pd.api.types.is_datetime64_any_dtype(tabela[col]) else "texto"
+    desc = table[col].describe()
+    col_kind = "numérica" if pd.api.types.is_numeric_dtype(table[col]) else (
+        "data" if pd.api.types.is_datetime64_any_dtype(table[col]) else "texto"
     )
     print()
-    print(f"{UI_INDENTACAO_1}Resumo estatístico de '{col}' (coluna {tipo_col}):\n")
+    print(f"{UI_INDENT_1}Resumo estatístico de '{col}' (coluna {col_kind}):\n")
 
     for stat, val in desc.items():
-        label = ETIQUETAS_ESTAT.get(stat, stat)
+        label = STAT_LABELS.get(stat, stat)
         if pd.isna(val):
-            valor_str = "--"
+            value_str = "--"
         elif hasattr(val, "strftime"):
-            valor_str = val.strftime("%d/%m/%Y")
+            value_str = val.strftime("%d/%m/%Y")
         elif isinstance(val, float):
-            valor_str = formatar_numero(val)
+            value_str = format_number(val)
         else:
-            valor_str = str(val)
-        print(UI_INDENTACAO_2 + label.ljust(22) + " " + valor_str)
-    pausar()
+            value_str = str(val)
+        print(UI_INDENT_2 + label.ljust(22) + " " + value_str)
+    pause()
 
 
-def estat_base():
-    col = pedir_coluna_numerica()
+def stat_basic():
+    col = ask_numeric_column()
     if col is None:
         return
     print()
-    print(f"{UI_INDENTACAO_1}Estatísticas base de '{col}':")
-    print(f"{UI_INDENTACAO_2}Média:   {formatar_numero(tabela[col].mean())}")
-    print(f"{UI_INDENTACAO_2}Soma:    {formatar_numero(tabela[col].sum())}")
-    print(f"{UI_INDENTACAO_2}Mínimo:  {formatar_numero(tabela[col].min())}")
-    print(f"{UI_INDENTACAO_2}Máximo:  {formatar_numero(tabela[col].max())}")
-    print(f"{UI_INDENTACAO_2}Mediana: {formatar_numero(tabela[col].median())}")
-    pausar()
+    print(f"{UI_INDENT_1}Estatísticas base de '{col}':")
+    print(f"{UI_INDENT_2}Média:   {format_number(table[col].mean())}")
+    print(f"{UI_INDENT_2}Soma:    {format_number(table[col].sum())}")
+    print(f"{UI_INDENT_2}Mínimo:  {format_number(table[col].min())}")
+    print(f"{UI_INDENT_2}Máximo:  {format_number(table[col].max())}")
+    print(f"{UI_INDENT_2}Mediana: {format_number(table[col].median())}")
+    pause()
 
 
-def estat_desv_var():
-    col = pedir_coluna_numerica()
+def stat_std_var():
+    col = ask_numeric_column()
     if col is None:
         return
     print()
-    print(f"{UI_INDENTACAO_1}Desvio padrão de '{col}': {formatar_numero(tabela[col].std())}")
-    print(f"{UI_INDENTACAO_1}Variância de '{col}':    {formatar_numero(tabela[col].var())}")
-    pausar()
+    print(f"{UI_INDENT_1}Desvio padrão de '{col}': {format_number(table[col].std())}")
+    print(f"{UI_INDENT_1}Variância de '{col}':    {format_number(table[col].var())}")
+    pause()
 
 
-def estat_moda():
-    col = pedir_coluna()
+def stat_mode():
+    col = ask_column()
     if col is None:
         return
-    modas = tabela[col].mode()
+    modes = table[col].mode()
     print()
-    if modas.empty:
-        print(f"{UI_INDENTACAO_1}Sem moda calculável.")
+    if modes.empty:
+        print(f"{UI_INDENT_1}Sem moda calculável.")
     else:
-        valores = ", ".join(str(m) for m in modas.tolist())
-        print(f"{UI_INDENTACAO_1}Moda de '{col}': {valores}")
-    pausar()
+        values = ", ".join(str(m) for m in modes.tolist())
+        print(f"{UI_INDENT_1}Moda de '{col}': {values}")
+    pause()
 
 
-def estat_quantis():
-    col = pedir_coluna_numerica()
+def stat_quantiles():
+    col = ask_numeric_column()
     if col is None:
         return
-    pers_input = input(f"{UI_INDENTACAO_1}Percentis separados por vírgula (ex: 0.25,0.5,0.75) [Enter = quartis]: ").strip()
-    if not pers_input:
-        percentis = [0.25, 0.5, 0.75]
+    percentiles_text = input(f"{UI_INDENT_1}Percentis separados por vírgula (ex: 0.25,0.5,0.75) [Enter = quartis]: ").strip()
+    if not percentiles_text:
+        percentiles = [0.25, 0.5, 0.75]
     else:
         try:
-            percentis = [float(p.strip()) for p in pers_input.split(",")]
-            if any(p < 0 or p > 1 for p in percentis):
+            percentiles = [float(p.strip()) for p in percentiles_text.split(",")]
+            if any(p < 0 or p > 1 for p in percentiles):
                 raise ValueError
         except ValueError:
-            print(f"{UI_INDENTACAO_1}Percentis inválidos (devem ser entre 0 e 1). A usar quartis.")
-            percentis = [0.25, 0.5, 0.75]
+            print(f"{UI_INDENT_1}Percentis inválidos (devem ser entre 0 e 1). A usar quartis.")
+            percentiles = [0.25, 0.5, 0.75]
 
-    quants = tabela[col].quantile(percentis)
+    quantiles = table[col].quantile(percentiles)
     print()
-    print(f"{UI_INDENTACAO_1}Percentis de '{col}':")
-    for p, v in quants.items():
-        print(UI_INDENTACAO_2 + f"{p * 100:.1f}%".rjust(6) + ": " + formatar_numero(v))
-    pausar()
+    print(f"{UI_INDENT_1}Percentis de '{col}':")
+    for p, v in quantiles.items():
+        print(UI_INDENT_2 + f"{p * 100:.1f}%".rjust(6) + ": " + format_number(v))
+    pause()
 
 
-def estat_contagem():
-    col = pedir_coluna()
+def stat_counts():
+    col = ask_column()
     if col is None:
         return
-    n_input = input(f"{UI_INDENTACAO_1}Top N (Enter = 10): ").strip()
+    n_text = input(f"{UI_INDENT_1}Top N (Enter = 10): ").strip()
     try:
-        n = int(n_input) if n_input else 10
+        n = int(n_text) if n_text else 10
         if n <= 0:
             raise ValueError
     except ValueError:
         n = 10
 
-    contagens = tabela[col].value_counts().head(n)
+    counts = table[col].value_counts().head(n)
     print()
-    print(f"{UI_INDENTACAO_1}Top {n} valores em '{col}':\n")
-    if contagens.empty:
-        print(f"{UI_INDENTACAO_2}(vazio)")
+    print(f"{UI_INDENT_1}Top {n} valores em '{col}':\n")
+    if counts.empty:
+        print(f"{UI_INDENT_2}(vazio)")
     else:
-        imprimir_tabela_pandas(contagens)
-    pausar()
+        print_pandas_table(counts)
+    pause()
 
 
-def estat_unicos():
-    col = pedir_coluna_ou_todas()
+def stat_unique():
+    col = ask_column_or_all()
     if col is None:
         return
-    if col is _TODAS:
+    if col is _ALL:
         print()
-        print(f"{UI_INDENTACAO_1}Valores únicos por coluna:\n")
-        for c in tabela.columns:
-            print(UI_INDENTACAO_2 + str(c).ljust(22) + " " + f"{tabela[c].nunique()} (de {int(tabela[c].notna().sum())} não-nulos)")
-        pausar()
+        print(f"{UI_INDENT_1}Valores únicos por coluna:\n")
+        for c in table.columns:
+            print(UI_INDENT_2 + str(c).ljust(22) + " " + f"{table[c].nunique()} (de {int(table[c].notna().sum())} não-nulos)")
+        pause()
         return
-    n_unicos = tabela[col].nunique()
-    n_total = int(tabela[col].notna().sum())
+    n_unique = table[col].nunique()
+    n_total = int(table[col].notna().sum())
     print()
-    print(f"{UI_INDENTACAO_1}Valores únicos em '{col}': {n_unicos} (de {n_total} não-nulos)")
-    pausar()
+    print(f"{UI_INDENT_1}Valores únicos em '{col}': {n_unique} (de {n_total} não-nulos)")
+    pause()
 
 
-def estat_asim_kurt():
-    col = pedir_coluna_numerica()
+def stat_skew_kurt():
+    col = ask_numeric_column()
     if col is None:
         return
     print()
-    print(f"{UI_INDENTACAO_1}Assimetria (skew) de '{col}': {formatar_numero(tabela[col].skew())}")
-    print(f"{UI_INDENTACAO_1}Curtose (kurt) de '{col}':    {formatar_numero(tabela[col].kurt())}")
-    pausar()
+    print(f"{UI_INDENT_1}Assimetria (skew) de '{col}': {format_number(table[col].skew())}")
+    print(f"{UI_INDENT_1}Curtose (kurt) de '{col}':    {format_number(table[col].kurt())}")
+    pause()
 
 
 
-def estatisticas():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def statistics_menu():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
     while True:
-        cabecalho("ESTATÍSTICAS")
-        print(f"{UI_INDENTACAO_1}[1] Describe (resumo completo)")
-        print(f"{UI_INDENTACAO_1}[2] Estatísticas base (média/soma/mín/máx/mediana)")
-        print(f"{UI_INDENTACAO_1}[3] Desvio padrão + variância")
-        print(f"{UI_INDENTACAO_1}[4] Moda")
-        print(f"{UI_INDENTACAO_1}[5] Quartis / Percentis")
-        print(f"{UI_INDENTACAO_1}[6] Top N valores mais frequentes")
-        print(f"{UI_INDENTACAO_1}[7] Nº de valores únicos")
-        print(f"{UI_INDENTACAO_1}[8] Assimetria + Curtose")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("ESTATÍSTICAS")
+        print(f"{UI_INDENT_1}[1] Describe (resumo completo)")
+        print(f"{UI_INDENT_1}[2] Estatísticas base (média/soma/mín/máx/mediana)")
+        print(f"{UI_INDENT_1}[3] Desvio padrão + variância")
+        print(f"{UI_INDENT_1}[4] Moda")
+        print(f"{UI_INDENT_1}[5] Quartis / Percentis")
+        print(f"{UI_INDENT_1}[6] Top N valores mais frequentes")
+        print(f"{UI_INDENT_1}[7] Nº de valores únicos")
+        print(f"{UI_INDENT_1}[8] Assimetria + Curtose")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1","2","3","4","5","6","7","8","0"})
+        choice = ask_option({"1","2","3","4","5","6","7","8","0"})
 
-        if escolha == "0":
+        if choice == "0":
             break
-        elif escolha == "1":
-            estat_resumo()
-        elif escolha == "2":
-            estat_base()
-        elif escolha == "3":
-            estat_desv_var()
-        elif escolha == "4":
-            estat_moda()
-        elif escolha == "5":
-            estat_quantis()
-        elif escolha == "6":
-            estat_contagem()
-        elif escolha == "7":
-            estat_unicos()
-        elif escolha == "8":
-            estat_asim_kurt()
+        elif choice == "1":
+            stat_summary()
+        elif choice == "2":
+            stat_basic()
+        elif choice == "3":
+            stat_std_var()
+        elif choice == "4":
+            stat_mode()
+        elif choice == "5":
+            stat_quantiles()
+        elif choice == "6":
+            stat_counts()
+        elif choice == "7":
+            stat_unique()
+        elif choice == "8":
+            stat_skew_kurt()
 
 
 # Análise avançada: info do DataFrame, groupby, duplicados, missing data
-def info_resumo():
-    if tabela.columns.empty:
-        print(f"{UI_INDENTACAO_1}Sem folha.")
-        pausar()
+def info_summary():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Sem folha.")
+        pause()
         return
 
-    cabecalho("INFO / RESUMO")
+    header("INFO / RESUMO")
     print()
-    print(f"{UI_INDENTACAO_1}Dimensões: {len(tabela)} linhas × {len(tabela.columns)} colunas")
-    print(f"{UI_INDENTACAO_1}Memória:   {tabela.memory_usage(deep=True).sum() / 1024:.2f} KB")
+    print(f"{UI_INDENT_1}Dimensões: {len(table)} linhas × {len(table.columns)} colunas")
+    print(f"{UI_INDENT_1}Memória:   {table.memory_usage(deep=True).sum() / 1024:.2f} KB")
     print()
-    print(UI_INDENTACAO_1 + "Coluna".ljust(22) + " " + "Tipo".ljust(14) + " " + "Não-nulos".rjust(12) + " " + "Missing %".rjust(11))
-    print(UI_INDENTACAO_1 + "-" * 62)
-    n_total = len(tabela)
-    for col in tabela.columns:
-        n_nao_null = int(tabela[col].notna().sum())
-        dtype_str = str(tabela[col].dtype)
-        miss_pct = (1 - n_nao_null / n_total) * 100 if n_total > 0 else 0.0
-        print(UI_INDENTACAO_1 + str(col).ljust(22) + " " + dtype_str.ljust(14) + " " + str(n_nao_null).rjust(12) + " " + f"{miss_pct:.1f}%".rjust(11))
-    pausar()
+    print(UI_INDENT_1 + "Coluna".ljust(22) + " " + "Tipo".ljust(14) + " " + "Não-nulos".rjust(12) + " " + "Missing %".rjust(11))
+    print(UI_INDENT_1 + "-" * 62)
+    n_total = len(table)
+    for col in table.columns:
+        n_non_null = int(table[col].notna().sum())
+        dtype_str = str(table[col].dtype)
+        miss_pct = (1 - n_non_null / n_total) * 100 if n_total > 0 else 0.0
+        print(UI_INDENT_1 + str(col).ljust(22) + " " + dtype_str.ljust(14) + " " + str(n_non_null).rjust(12) + " " + f"{miss_pct:.1f}%".rjust(11))
+    pause()
 
 
-def agrupar():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def group_by():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    cabecalho("AGRUPAR (groupby)")
+    header("AGRUPAR (groupby)")
     print()
 
-    col_grupo = pedir_coluna("Coluna para agrupar")
-    if col_grupo is None:
+    group_col = ask_column("Coluna para agrupar")
+    if group_col is None:
         return
 
-    col_num = pedir_coluna_numerica("Coluna numérica a agregar")
-    if col_num is None:
+    num_col = ask_numeric_column("Coluna numérica a agregar")
+    if num_col is None:
         return
 
     print()
-    print(f"{UI_INDENTACAO_1}Agregação: [1] Soma  [2] Média  [3] Contagem  [4] Mínimo  [5] Máximo")
-    op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Agregação: [1] Soma  [2] Média  [3] Contagem  [4] Mínimo  [5] Máximo")
+    op = input(f"{UI_INDENT_1}Opção: ").strip()
     agg_map = {"1": "sum", "2": "mean", "3": "count", "4": "min", "5": "max"}
     agg = agg_map.get(op, "mean")
 
-    resultado = tabela.groupby(col_grupo)[col_num].agg(agg).reset_index()
-    resultado.columns = [col_grupo, f"{col_num} ({agg})"]
+    result = table.groupby(group_col)[num_col].agg(agg).reset_index()
+    result.columns = [group_col, f"{num_col} ({agg})"]
     print()
-    print(f"{UI_INDENTACAO_1}groupby('{col_grupo}')['{col_num}'].{agg}():\n")
-    desenhar_tabela_dados(resultado)
-    pausar()
+    print(f"{UI_INDENT_1}groupby('{group_col}')['{num_col}'].{agg}():\n")
+    draw_data_table(result)
+    pause()
 
 
-def duplicados():
-    global tabela
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def duplicates():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    cabecalho("DUPLICADOS")
+    header("DUPLICADOS")
     print()
 
-    dup_mask = tabela.duplicated(keep=False)
+    dup_mask = table.duplicated(keep=False)
     n_dup = int(dup_mask.sum())
 
     if n_dup == 0:
-        print(f"{UI_INDENTACAO_1}Nenhum duplicado encontrado.")
-        pausar()
+        print(f"{UI_INDENT_1}Nenhum duplicado encontrado.")
+        pause()
         return
 
-    print(f"{UI_INDENTACAO_1}{n_dup} linha(s) duplicada(s):\n")
-    desenhar_tabela_dados(tabela[dup_mask])
+    print(f"{UI_INDENT_1}{n_dup} linha(s) duplicada(s):\n")
+    draw_data_table(table[dup_mask])
     print()
 
-    if confirmar("Remover duplicados (mantém primeira ocorrência)?"):
-        n_antes = len(tabela)
-        tabela = tabela.drop_duplicates(ignore_index=True)
-        aplicar_tipos()
-        guardar_estado()
-        registar_ponto()
-        print(f"\n{UI_INDENTACAO_1}{n_antes - len(tabela)} duplicado(s) removido(s).")
+    if confirm("Remover duplicados (mantém primeira ocorrência)?"):
+        n_before = len(table)
+        table = table.drop_duplicates(ignore_index=True)
+        apply_types()
+        save_state()
+        record_checkpoint()
+        print(f"\n{UI_INDENT_1}{n_before - len(table)} duplicado(s) removido(s).")
     else:
-        print(f"\n{UI_INDENTACAO_1}Nenhuma alteração.")
-    pausar()
+        print(f"\n{UI_INDENT_1}Nenhuma alteração.")
+    pause()
 
 
-def valor_para_coluna(col, valor):
+def value_for_column(col, value):
     """Ajusta um valor calculado (média, mediana) ao tipo da coluna.
 
     Colunas inteiras não aceitam fracções, por isso o valor é arredondado.
     """
-    if pd.isna(valor):
-        return valor
-    if pd.api.types.is_integer_dtype(tabela[col]):
-        return round(valor)
-    return valor
+    if pd.isna(value):
+        return value
+    if pd.api.types.is_integer_dtype(table[col]):
+        return round(value)
+    return value
 
 
-def dados_em_falta():
-    global tabela
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def missing_data():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    cabecalho("DADOS EM FALTA")
+    header("DADOS EM FALTA")
     print()
 
-    contagens = tabela.isna().sum()
-    n_total = len(tabela)
+    counts = table.isna().sum()
+    n_total = len(table)
 
-    print(f"{UI_INDENTACAO_1}Missing por coluna (total {n_total} linhas):\n")
-    for col in tabela.columns:
-        n_miss = int(contagens[col])
+    print(f"{UI_INDENT_1}Missing por coluna (total {n_total} linhas):\n")
+    for col in table.columns:
+        n_miss = int(counts[col])
         pct = (n_miss / n_total * 100) if n_total else 0
-        print(UI_INDENTACAO_2 + str(col).ljust(22) + " " + str(n_miss).rjust(5) + f"{UI_INDENTACAO_1} (" + f"{pct:.1f}%".rjust(6) + ")")
+        print(UI_INDENT_2 + str(col).ljust(22) + " " + str(n_miss).rjust(5) + f"{UI_INDENT_1} (" + f"{pct:.1f}%".rjust(6) + ")")
     print()
 
-    if int(contagens.sum()) == 0:
-        print(f"{UI_INDENTACAO_1}Sem missing data. Nada a tratar.")
-        pausar()
+    if int(counts.sum()) == 0:
+        print(f"{UI_INDENT_1}Sem missing data. Nada a tratar.")
+        pause()
         return
 
-    print(f"{UI_INDENTACAO_1}Acções:")
-    print(f"{UI_INDENTACAO_2}[1] Preencher missing (fillna)")
-    print(f"{UI_INDENTACAO_2}[2] Remover linhas com missing (dropna)")
-    print(f"{UI_INDENTACAO_2}[0] Voltar")
-    op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Acções:")
+    print(f"{UI_INDENT_2}[1] Preencher missing (fillna)")
+    print(f"{UI_INDENT_2}[2] Remover linhas com missing (dropna)")
+    print(f"{UI_INDENT_2}[0] Voltar")
+    op = input(f"{UI_INDENT_1}Opção: ").strip()
 
     if op == "1":
-        col = pedir_coluna("Coluna a preencher")
+        col = ask_column("Coluna a preencher")
         if col is None:
             return
         print()
-        print(f"{UI_INDENTACAO_2}[1] Valor específico")
-        print(f"{UI_INDENTACAO_2}[2] Média (se numérica)")
-        print(f"{UI_INDENTACAO_2}[3] Mediana (se numérica)")
-        print(f"{UI_INDENTACAO_2}[4] Forward-fill (ffill)")
-        sub_op = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+        print(f"{UI_INDENT_2}[1] Valor específico")
+        print(f"{UI_INDENT_2}[2] Média (se numérica)")
+        print(f"{UI_INDENT_2}[3] Mediana (se numérica)")
+        print(f"{UI_INDENT_2}[4] Forward-fill (ffill)")
+        sub_choice = input(f"{UI_INDENT_1}Opção: ").strip()
 
-        if sub_op == "1":
-            valor = input(f"{UI_INDENTACAO_1}Valor a usar: ").strip()
-            tipo = tipo_de(col)
+        if sub_choice == "1":
+            value = input(f"{UI_INDENT_1}Valor a usar: ").strip()
+            col_type = type_of(col)
             try:
-                tabela[col] = tabela[col].fillna(converter(valor, tipo))
+                table[col] = table[col].fillna(convert_value(value, col_type))
             except Exception as e:
-                print(f"{UI_INDENTACAO_1}Erro: {e}")
-                pausar()
+                print(f"{UI_INDENT_1}Erro: {e}")
+                pause()
                 return
-        elif sub_op == "2":
-            if not pd.api.types.is_numeric_dtype(tabela[col]):
-                print(f"{UI_INDENTACAO_1}Coluna não numérica.")
-                pausar()
+        elif sub_choice == "2":
+            if not pd.api.types.is_numeric_dtype(table[col]):
+                print(f"{UI_INDENT_1}Coluna não numérica.")
+                pause()
                 return
-            tabela[col] = tabela[col].fillna(valor_para_coluna(col, tabela[col].mean()))
-        elif sub_op == "3":
-            if not pd.api.types.is_numeric_dtype(tabela[col]):
-                print(f"{UI_INDENTACAO_1}Coluna não numérica.")
-                pausar()
+            table[col] = table[col].fillna(value_for_column(col, table[col].mean()))
+        elif sub_choice == "3":
+            if not pd.api.types.is_numeric_dtype(table[col]):
+                print(f"{UI_INDENT_1}Coluna não numérica.")
+                pause()
                 return
-            tabela[col] = tabela[col].fillna(valor_para_coluna(col, tabela[col].median()))
-        elif sub_op == "4":
-            tabela[col] = tabela[col].ffill()
+            table[col] = table[col].fillna(value_for_column(col, table[col].median()))
+        elif sub_choice == "4":
+            table[col] = table[col].ffill()
         else:
             return
 
-        aplicar_tipos()
-        guardar_estado()
-        registar_ponto()
-        print(f"\n{UI_INDENTACAO_1}Coluna '{col}' preenchida.")
+        apply_types()
+        save_state()
+        record_checkpoint()
+        print(f"\n{UI_INDENT_1}Coluna '{col}' preenchida.")
     elif op == "2":
-        if not confirmar(f"Remover linhas com qualquer missing ({int(contagens.sum())} células)?"):
+        if not confirm(f"Remover linhas com qualquer missing ({int(counts.sum())} células)?"):
             return
-        n_antes = len(tabela)
-        tabela = tabela.dropna().reset_index(drop=True)
-        guardar_estado()
-        registar_ponto()
-        print(f"\n{UI_INDENTACAO_1}{n_antes - len(tabela)} linha(s) removida(s).")
-    pausar()
+        n_before = len(table)
+        table = table.dropna().reset_index(drop=True)
+        save_state()
+        record_checkpoint()
+        print(f"\n{UI_INDENT_1}{n_before - len(table)} linha(s) removida(s).")
+    pause()
 
 
 # Gráficos (matplotlib + numpy): dispersão, área, histograma, boxplot, heatmap, tendência
-def gerar_grafico_dispersao():
-    cols = pedir_colunas_numericas(
+def plot_scatter():
+    cols = ask_numeric_columns(
         min_n=2,
         max_n=2,
-        mensagem="Colunas X,Y para dispersão (ex.: idade,salario)"
+        message="Colunas X,Y para dispersão (ex.: idade,salario)"
     )
     if cols is None:
         return
     col_x, col_y = cols
-    pares = tabela[[col_x, col_y]].dropna()
-    if pares.empty:
-        print(f"{UI_INDENTACAO_1}Sem pares de valores válidos para dispersão.")
-        pausar()
+    pairs = table[[col_x, col_y]].dropna()
+    if pairs.empty:
+        print(f"{UI_INDENT_1}Sem pares de valores válidos para dispersão.")
+        pause()
         return
 
-    x = pares[col_x].to_numpy(dtype=float)
-    y = pares[col_y].to_numpy(dtype=float)
+    x = pairs[col_x].to_numpy(dtype=float)
+    y = pairs[col_y].to_numpy(dtype=float)
     plt.figure()
     plt.scatter(x, y, color="purple", alpha=0.7, edgecolor="black")
     plt.xlabel(col_x)
@@ -1958,14 +1958,14 @@ def gerar_grafico_dispersao():
     plt.show()
 
 
-def gerar_grafico_area():
-    cols = pedir_colunas_numericas(min_n=1, mensagem="Coluna(s) para área")
+def plot_area():
+    cols = ask_numeric_columns(min_n=1, message="Coluna(s) para área")
     if cols is None:
         return
-    x = np.arange(len(tabela))
+    x = np.arange(len(table))
     plt.figure()
     for c in cols:
-        vals = tabela[c].fillna(0).to_numpy(dtype=float)
+        vals = table[c].fillna(0).to_numpy(dtype=float)
         cum = np.cumsum(vals)
         plt.plot(x, cum, marker="o", label=c)
         plt.fill_between(x, cum, alpha=0.2)
@@ -1979,31 +1979,31 @@ def gerar_grafico_area():
 
 
 # Gráficos analíticos: histograma, boxplot, heatmap, média móvel, tendência
-def gerar_histograma():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def plot_histogram():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
-    resultado = pedir_colunas_numericas(min_n=1, max_n=1, mensagem="Coluna para histograma")
-    if resultado is None:
+    result = ask_numeric_columns(min_n=1, max_n=1, message="Coluna para histograma")
+    if result is None:
         return
-    col = resultado[0]
-    vals = tabela[col].dropna().to_numpy(dtype=float)
+    col = result[0]
+    vals = table[col].dropna().to_numpy(dtype=float)
     if len(vals) == 0:
-        print(f"{UI_INDENTACAO_1}Sem valores numéricos.")
-        pausar()
+        print(f"{UI_INDENT_1}Sem valores numéricos.")
+        pause()
         return
-    q1, mediana, q3 = np.percentile(vals, [25, 50, 75])
+    q1, median, q3 = np.percentile(vals, [25, 50, 75])
     bins_auto = max(5, int(np.sqrt(len(vals))))
     bins_max = max(10, min(100, len(vals)))
-    bins = pedir_inteiro_intervalo(f"{UI_INDENTACAO_1}Nº de bins [{2}-{bins_max}] (Enter = {bins_auto}): ", 2, bins_max, default=bins_auto)
+    bins = ask_int_in_range(f"{UI_INDENT_1}Nº de bins [{2}-{bins_max}] (Enter = {bins_auto}): ", 2, bins_max, default=bins_auto)
     if bins is None:
         return
     plt.figure()
     plt.hist(vals, bins=bins, color="teal", edgecolor="black", alpha=0.75)
-    plt.axvline(q1, color="orange", linestyle="--", label=f"Q1 ({formatar_numero(q1)})")
-    plt.axvline(mediana, color="red", linestyle="--", label=f"Mediana ({formatar_numero(mediana)})")
-    plt.axvline(q3, color="purple", linestyle="--", label=f"Q3 ({formatar_numero(q3)})")
+    plt.axvline(q1, color="orange", linestyle="--", label=f"Q1 ({format_number(q1)})")
+    plt.axvline(median, color="red", linestyle="--", label=f"Mediana ({format_number(median)})")
+    plt.axvline(q3, color="purple", linestyle="--", label=f"Q3 ({format_number(q3)})")
     plt.xlabel(col)
     plt.ylabel("Frequência")
     plt.title(f"Distribuição de '{col}'")
@@ -2013,19 +2013,19 @@ def gerar_histograma():
     plt.show()
 
 
-def gerar_diagrama_caixas():
-    cols = pedir_colunas_numericas(min_n=1, mensagem="Coluna(s) para boxplot")
+def plot_boxplot():
+    cols = ask_numeric_columns(min_n=1, message="Coluna(s) para boxplot")
     if cols is None:
         return
-    dados = [tabela[c].dropna().to_numpy(dtype=float) for c in cols]
+    data_rows = [table[c].dropna().to_numpy(dtype=float) for c in cols]
     plt.figure()
-    plt.boxplot(dados, tick_labels=cols)
-    for i, arr in enumerate(dados, start=1):
+    plt.boxplot(data_rows, tick_labels=cols)
+    for i, arr in enumerate(data_rows, start=1):
         if len(arr) == 0:
             continue
         q1, _, q3 = np.percentile(arr, [25, 50, 75])
-        plt.text(i, q3, f"Q3={formatar_numero(q3)}", ha="center", va="bottom", fontsize=8)
-        plt.text(i, q1, f"Q1={formatar_numero(q1)}", ha="center", va="top", fontsize=8)
+        plt.text(i, q3, f"Q3={format_number(q3)}", ha="center", va="bottom", fontsize=8)
+        plt.text(i, q1, f"Q1={format_number(q1)}", ha="center", va="top", fontsize=8)
     plt.xlabel("Coluna")
     plt.ylabel("Valor")
     plt.title("Boxplot — quartis e mediana por coluna")
@@ -2034,98 +2034,98 @@ def gerar_diagrama_caixas():
     plt.show()
 
 
-def gerar_mapa_calor_correlacao():
-    cols = pedir_colunas_numericas(min_n=2, mensagem="Colunas para correlação")
+def plot_correlation_heatmap():
+    cols = ask_numeric_columns(min_n=2, message="Colunas para correlação")
     if cols is None:
         return
-    dados = tabela[cols].dropna()
-    if len(dados) < 2:
-        print(f"{UI_INDENTACAO_1}Necessário pelo menos 2 linhas com dados válidos nas colunas selecionadas.")
-        pausar()
+    data_rows = table[cols].dropna()
+    if len(data_rows) < 2:
+        print(f"{UI_INDENT_1}Necessário pelo menos 2 linhas com dados válidos nas colunas selecionadas.")
+        pause()
         return
-    matriz = dados.corr().to_numpy()
-    if np.isnan(matriz).all():
-        print(f"{UI_INDENTACAO_1}Correlação indefinida para as colunas selecionadas.")
-        pausar()
+    matrix = data_rows.corr().to_numpy()
+    if np.isnan(matrix).all():
+        print(f"{UI_INDENT_1}Correlação indefinida para as colunas selecionadas.")
+        pause()
         return
     n = len(cols)
     plt.figure()
-    plt.imshow(matriz, cmap="coolwarm", vmin=-1, vmax=1)
+    plt.imshow(matrix, cmap="coolwarm", vmin=-1, vmax=1)
     plt.colorbar(label="Correlação")
-    posicoes = np.arange(n)
-    plt.xticks(posicoes, cols, rotation=45, ha="right")
-    plt.yticks(posicoes, cols)
+    positions = np.arange(n)
+    plt.xticks(positions, cols, rotation=45, ha="right")
+    plt.yticks(positions, cols)
     for i in range(n):
         for j in range(n):
-            plt.text(j, i, f"{matriz[i, j]:.2f}", ha="center", va="center", color="black")
+            plt.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", color="black")
     plt.title("Heatmap de correlação")
     plt.tight_layout()
     plt.show()
 
 
-def gerar_linhas_media_movel():
-    cols = pedir_colunas_numericas(min_n=1, mensagem="Coluna(s) para média móvel")
+def plot_moving_average():
+    cols = ask_numeric_columns(min_n=1, message="Coluna(s) para média móvel")
     if cols is None:
         return
-    n_linhas = len(tabela)
-    if n_linhas < 2:
-        print(f"{UI_INDENTACAO_1}Necessário pelo menos 2 linhas.")
-        pausar()
+    n_rows = len(table)
+    if n_rows < 2:
+        print(f"{UI_INDENT_1}Necessário pelo menos 2 linhas.")
+        pause()
         return
-    janela_max = min(50, n_linhas)
-    janela_default = min(5, janela_max)
-    janela = pedir_inteiro_intervalo(f"{UI_INDENTACAO_1}Janela da média móvel [2-{janela_max}] (Enter = {janela_default}): ", 2, janela_max, default=janela_default)
-    if janela is None:
+    max_window = min(50, n_rows)
+    default_window = min(5, max_window)
+    window = ask_int_in_range(f"{UI_INDENT_1}Janela da média móvel [2-{max_window}] (Enter = {default_window}): ", 2, max_window, default=default_window)
+    if window is None:
         return
-    kernel = np.ones(janela) / janela
-    x = np.arange(n_linhas)
+    kernel = np.ones(window) / window
+    x = np.arange(n_rows)
     plt.figure()
     for c in cols:
-        vals = tabela[c].to_numpy(dtype=float)
+        vals = table[c].to_numpy(dtype=float)
         if np.isnan(vals).all():
-            print(f"{UI_INDENTACAO_1}Coluna '{c}' sem valores válidos — ignorada.")
+            print(f"{UI_INDENT_1}Coluna '{c}' sem valores válidos — ignorada.")
             continue
         if np.isnan(vals).any():
             vals = np.where(np.isnan(vals), np.nanmean(vals), vals)
-        suavizado = np.convolve(vals, kernel, mode="same")
-        plt.plot(x, suavizado, marker="o", label=c)
+        smoothed = np.convolve(vals, kernel, mode="same")
+        plt.plot(x, smoothed, marker="o", label=c)
     plt.xlabel("Índice da linha")
     plt.ylabel("Valor suavizado")
-    plt.title(f"Média móvel (np.convolve, janela={janela})")
+    plt.title(f"Média móvel (np.convolve, janela={window})")
     plt.grid(linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
     plt.show()
 
 
-def gerar_tendencia_polinomial():
-    cols = pedir_colunas_numericas(min_n=1, mensagem="Coluna(s) para tendência")
+def plot_polynomial_trend():
+    cols = ask_numeric_columns(min_n=1, message="Coluna(s) para tendência")
     if cols is None:
         return
-    n = len(tabela)
+    n = len(table)
     if n < 2:
-        print(f"{UI_INDENTACAO_1}Necessário pelo menos 2 linhas.")
-        pausar()
+        print(f"{UI_INDENT_1}Necessário pelo menos 2 linhas.")
+        pause()
         return
-    grau_max = min(5, n - 1)
-    grau_default = min(2, grau_max)
-    grau = pedir_inteiro_intervalo(f"{UI_INDENTACAO_1}Grau do polinómio [1-{grau_max}] (Enter = {grau_default}): ", 1, grau_max, default=grau_default)
-    if grau is None:
+    max_degree = min(5, n - 1)
+    default_degree = min(2, max_degree)
+    degree = ask_int_in_range(f"{UI_INDENT_1}Grau do polinómio [1-{max_degree}] (Enter = {default_degree}): ", 1, max_degree, default=default_degree)
+    if degree is None:
         return
     x = np.arange(n)
     plt.figure()
     for c in cols:
-        y = tabela[c].to_numpy(dtype=float)
+        y = table[c].to_numpy(dtype=float)
         if np.isnan(y).all():
-            print(f"{UI_INDENTACAO_1}Coluna '{c}' sem valores válidos — ignorada.")
+            print(f"{UI_INDENT_1}Coluna '{c}' sem valores válidos — ignorada.")
             continue
         if np.isnan(y).any():
             y = np.where(np.isnan(y), np.nanmean(y), y)
-        coefs = np.polyfit(x, y, grau)
+        coefs = np.polyfit(x, y, degree)
         poly = np.poly1d(coefs)
-        tendencia = poly(x)
+        trend = poly(x)
         plt.scatter(x, y, alpha=0.3, s=20)
-        plt.plot(x, tendencia, linewidth=2, label=c)
+        plt.plot(x, trend, linewidth=2, label=c)
     plt.xlabel("Índice da linha")
     plt.ylabel("Valor")
     plt.title("Tendência polinomial (np.polyfit)")
@@ -2136,81 +2136,81 @@ def gerar_tendencia_polinomial():
 
 
 # Gráficos com eixos personalizados (escolha de eixo X e agregações)
-def gerar_barras_eixos():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def plot_bars():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
     print()
-    print(f"{UI_INDENTACAO_1}Eixo X: [1] Índice da linha  [2] Coluna da tabela")
-    op_x = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Eixo X: [1] Índice da linha  [2] Coluna da tabela")
+    op_x = input(f"{UI_INDENT_1}Opção: ").strip()
 
     if op_x == "2":
-        col_x = pedir_coluna("Coluna para eixo X")
+        col_x = ask_column("Coluna para eixo X")
         if col_x is None:
             return
-        col_y = pedir_coluna_numerica("Coluna numérica para eixo Y")
+        col_y = ask_numeric_column("Coluna numérica para eixo Y")
         if col_y is None:
             return
         print()
-        print(f"{UI_INDENTACAO_1}Agregação: [1] Soma  [2] Média  [3] Contagem  [4] Mínimo  [5] Máximo")
+        print(f"{UI_INDENT_1}Agregação: [1] Soma  [2] Média  [3] Contagem  [4] Mínimo  [5] Máximo")
         agg_map = {"1": "sum", "2": "mean", "3": "count", "4": "min", "5": "max"}
-        agg = agg_map.get(input(f"{UI_INDENTACAO_1}Opção: ").strip(), "mean")
-        resultado = tabela.groupby(col_x)[col_y].agg(agg)
-        x_vals = [str(v) for v in resultado.index]
-        y_vals = resultado.values
+        agg = agg_map.get(input(f"{UI_INDENT_1}Opção: ").strip(), "mean")
+        result = table.groupby(col_x)[col_y].agg(agg)
+        x_vals = [str(v) for v in result.index]
+        y_vals = result.values
         xlabel = str(col_x)
         ylabel = f"{col_y} ({agg})"
-        titulo = f"Barras: {col_y} por {col_x} ({agg})"
+        title = f"Barras: {col_y} por {col_x} ({agg})"
     else:
-        col_y = pedir_coluna_numerica("Coluna numérica para eixo Y")
+        col_y = ask_numeric_column("Coluna numérica para eixo Y")
         if col_y is None:
             return
-        x_vals = list(tabela.index.astype(str))
-        y_vals = tabela[col_y].to_numpy(dtype=float)
+        x_vals = list(table.index.astype(str))
+        y_vals = table[col_y].to_numpy(dtype=float)
         xlabel = "Índice"
         ylabel = str(col_y)
-        titulo = f"Barras: {col_y} por índice"
+        title = f"Barras: {col_y} por índice"
 
     plt.figure()
     plt.bar(x_vals, y_vals, color="steelblue", edgecolor="black")
     plt.xlabel(xlabel)
     plt.ylabel(ylabel)
-    plt.title(titulo)
+    plt.title(title)
     plt.xticks(rotation=45, ha="right")
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
     plt.show()
 
 
-def gerar_linhas_eixos():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def plot_lines():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
     print()
-    print(f"{UI_INDENTACAO_1}Eixo X: [1] Índice da linha  [2] Coluna da tabela")
-    op_x = input(f"{UI_INDENTACAO_1}Opção: ").strip()
+    print(f"{UI_INDENT_1}Eixo X: [1] Índice da linha  [2] Coluna da tabela")
+    op_x = input(f"{UI_INDENT_1}Opção: ").strip()
 
     if op_x == "2":
-        col_x = pedir_coluna("Coluna para eixo X")
+        col_x = ask_column("Coluna para eixo X")
         if col_x is None:
             return
-        x_vals = tabela[col_x].tolist()
+        x_vals = table[col_x].tolist()
         xlabel = str(col_x)
     else:
-        x_vals = list(tabela.index)
+        x_vals = list(table.index)
         xlabel = "Índice"
 
-    cols_y = pedir_colunas_numericas(min_n=1, mensagem="Coluna(s) para eixo Y")
+    cols_y = ask_numeric_columns(min_n=1, message="Coluna(s) para eixo Y")
     if cols_y is None:
         return
 
     plt.figure()
     for c in cols_y:
-        y_vals = tabela[c].to_numpy(dtype=float)
+        y_vals = table[c].to_numpy(dtype=float)
         plt.plot(x_vals, y_vals, marker="o", label=c)
     plt.xlabel(xlabel)
     plt.ylabel("Valor")
@@ -2221,234 +2221,234 @@ def gerar_linhas_eixos():
     plt.show()
 
 
-def gerar_circular_eixos():
-    if tabela.empty:
-        print(f"{UI_INDENTACAO_1}Sem dados.")
-        pausar()
+def plot_pie():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
         return
 
-    col_labels = pedir_coluna("Coluna de categorias (labels)")
+    col_labels = ask_column("Coluna de categorias (labels)")
     if col_labels is None:
         return
-    col_val = pedir_coluna_numerica("Coluna numérica (valores)")
-    if col_val is None:
+    value_col = ask_numeric_column("Coluna numérica (valores)")
+    if value_col is None:
         return
 
     print()
-    print(f"{UI_INDENTACAO_1}Agregação: [1] Soma  [2] Média  [3] Contagem")
+    print(f"{UI_INDENT_1}Agregação: [1] Soma  [2] Média  [3] Contagem")
     agg_map = {"1": "sum", "2": "mean", "3": "count"}
-    agg = agg_map.get(input(f"{UI_INDENTACAO_1}Opção: ").strip(), "sum")
+    agg = agg_map.get(input(f"{UI_INDENT_1}Opção: ").strip(), "sum")
 
-    resultado = tabela.groupby(col_labels)[col_val].agg(agg)
-    resultado = resultado[resultado > 0]
-    if resultado.empty:
-        print(f"{UI_INDENTACAO_1}Sem valores positivos para desenhar.")
-        pausar()
+    result = table.groupby(col_labels)[value_col].agg(agg)
+    result = result[result > 0]
+    if result.empty:
+        print(f"{UI_INDENT_1}Sem valores positivos para desenhar.")
+        pause()
         return
 
     plt.figure()
-    plt.pie(resultado.values, labels=[str(rotulo) for rotulo in resultado.index], autopct="%1.1f%%", startangle=90)
-    plt.title(f"Circular: {col_val} por {col_labels} ({agg})")
+    plt.pie(result.values, labels=[str(label_text) for label_text in result.index], autopct="%1.1f%%", startangle=90)
+    plt.title(f"Circular: {value_col} por {col_labels} ({agg})")
     plt.tight_layout()
     plt.show()
 
 
 # Menu de gráficos: orquestra todas as visualizações disponíveis
-def menu_graficos():
+def menu_charts():
     while True:
-        cabecalho("GRÁFICOS (matplotlib + numpy)")
-        print(f"{UI_INDENTACAO_1}[1] Barras (eixos à escolha)")
-        print(f"{UI_INDENTACAO_1}[2] Linhas (eixo X à escolha)")
-        print(f"{UI_INDENTACAO_1}[3] Circular (categorias reais)")
-        print(f"{UI_INDENTACAO_1}[4] Dispersão (2 colunas)")
-        print(f"{UI_INDENTACAO_1}[5] Área (soma acumulada)")
-        print(f"{UI_INDENTACAO_1}[6] Histograma (1 coluna + quartis)")
-        print(f"{UI_INDENTACAO_1}[7] Boxplot (quartis e mediana)")
-        print(f"{UI_INDENTACAO_1}[8] Heatmap de correlação")
-        print(f"{UI_INDENTACAO_1}[9] Linhas com média móvel")
-        print(f"{UI_INDENTACAO_1}[A] Tendência polinomial")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("GRÁFICOS (matplotlib + numpy)")
+        print(f"{UI_INDENT_1}[1] Barras (eixos à escolha)")
+        print(f"{UI_INDENT_1}[2] Linhas (eixo X à escolha)")
+        print(f"{UI_INDENT_1}[3] Circular (categorias reais)")
+        print(f"{UI_INDENT_1}[4] Dispersão (2 colunas)")
+        print(f"{UI_INDENT_1}[5] Área (soma acumulada)")
+        print(f"{UI_INDENT_1}[6] Histograma (1 coluna + quartis)")
+        print(f"{UI_INDENT_1}[7] Boxplot (quartis e mediana)")
+        print(f"{UI_INDENT_1}[8] Heatmap de correlação")
+        print(f"{UI_INDENT_1}[9] Linhas com média móvel")
+        print(f"{UI_INDENT_1}[A] Tendência polinomial")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            gerar_barras_eixos()
-        elif escolha == "2":
-            gerar_linhas_eixos()
-        elif escolha == "3":
-            gerar_circular_eixos()
-        elif escolha == "4":
-            gerar_grafico_dispersao()
-        elif escolha == "5":
-            gerar_grafico_area()
-        elif escolha == "6":
-            gerar_histograma()
-        elif escolha == "7":
-            gerar_diagrama_caixas()
-        elif escolha == "8":
-            gerar_mapa_calor_correlacao()
-        elif escolha == "9":
-            gerar_linhas_media_movel()
-        elif escolha == "A":
-            gerar_tendencia_polinomial()
+        elif choice == "1":
+            plot_bars()
+        elif choice == "2":
+            plot_lines()
+        elif choice == "3":
+            plot_pie()
+        elif choice == "4":
+            plot_scatter()
+        elif choice == "5":
+            plot_area()
+        elif choice == "6":
+            plot_histogram()
+        elif choice == "7":
+            plot_boxplot()
+        elif choice == "8":
+            plot_correlation_heatmap()
+        elif choice == "9":
+            plot_moving_average()
+        elif choice == "A":
+            plot_polynomial_trend()
 
 
 # Menus secundários: folha, linhas, colunas, análise básica e avançada
-def menu_folha():
+def menu_sheet():
     while True:
-        cabecalho("GESTÃO DE FOLHA")
-        print(f"{UI_INDENTACAO_1}[1] Nova folha (definir colunas)")
-        print(f"{UI_INDENTACAO_1}[2] Importar Excel")
-        print(f"{UI_INDENTACAO_1}[3] Exportar Excel")
-        print(f"{UI_INDENTACAO_1}[4] Exportar Word (tabela + estatísticas)")
-        print(f"{UI_INDENTACAO_1}[5] Exportar PDF  (tabela + estatísticas)")
-        print(f"{UI_INDENTACAO_1}[6] Folha dummy (dados de exemplo)")
-        print(f"{UI_INDENTACAO_1}[7] Limpar folha (reset)")
-        print(f"{UI_INDENTACAO_1}[8] Importar CSV")
-        print(f"{UI_INDENTACAO_1}[9] Exportar CSV")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("GESTÃO DE FOLHA")
+        print(f"{UI_INDENT_1}[1] Nova folha (definir colunas)")
+        print(f"{UI_INDENT_1}[2] Importar Excel")
+        print(f"{UI_INDENT_1}[3] Exportar Excel")
+        print(f"{UI_INDENT_1}[4] Exportar Word (tabela + estatísticas)")
+        print(f"{UI_INDENT_1}[5] Exportar PDF  (tabela + estatísticas)")
+        print(f"{UI_INDENT_1}[6] Folha dummy (dados de exemplo)")
+        print(f"{UI_INDENT_1}[7] Limpar folha (reset)")
+        print(f"{UI_INDENT_1}[8] Importar CSV")
+        print(f"{UI_INDENT_1}[9] Exportar CSV")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            nova_folha()
-        elif escolha == "2":
-            importar()
-        elif escolha == "3":
-            exportar()
-        elif escolha == "4":
-            exportar_word()
-        elif escolha == "5":
-            exportar_pdf()
-        elif escolha == "6":
-            criar_folha_dummy()
-        elif escolha == "7":
-            limpar_folha()
-        elif escolha == "8":
-            importar_csv()
-        elif escolha == "9":
-            exportar_csv()
+        elif choice == "1":
+            new_sheet()
+        elif choice == "2":
+            import_excel()
+        elif choice == "3":
+            export_excel()
+        elif choice == "4":
+            export_word()
+        elif choice == "5":
+            export_pdf()
+        elif choice == "6":
+            create_dummy_sheet()
+        elif choice == "7":
+            clear_sheet()
+        elif choice == "8":
+            import_csv()
+        elif choice == "9":
+            export_csv()
 
 
-def menu_linhas():
+def menu_rows():
     while True:
-        cabecalho("LINHAS")
-        print(f"{UI_INDENTACAO_1}[1] Adicionar linha(s)")
-        print(f"{UI_INDENTACAO_1}[2] Editar célula")
-        print(f"{UI_INDENTACAO_1}[3] Remover linha")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("LINHAS")
+        print(f"{UI_INDENT_1}[1] Adicionar linha(s)")
+        print(f"{UI_INDENT_1}[2] Editar célula")
+        print(f"{UI_INDENT_1}[3] Remover linha")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            adicionar_linha()
-        elif escolha == "2":
-            editar_celula()
-        elif escolha == "3":
-            remover_linha()
+        elif choice == "1":
+            add_row()
+        elif choice == "2":
+            edit_cell()
+        elif choice == "3":
+            remove_row()
 
 
-def menu_colunas():
+def menu_columns():
     while True:
-        cabecalho("COLUNAS")
-        print(f"{UI_INDENTACAO_1}[1] Adicionar coluna")
-        print(f"{UI_INDENTACAO_1}[2] Remover coluna")
-        print(f"{UI_INDENTACAO_1}[3] Renomear coluna")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("COLUNAS")
+        print(f"{UI_INDENT_1}[1] Adicionar coluna")
+        print(f"{UI_INDENT_1}[2] Remover coluna")
+        print(f"{UI_INDENT_1}[3] Renomear coluna")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            adicionar_coluna()
-        elif escolha == "2":
-            remover_coluna()
-        elif escolha == "3":
-            renomear_coluna()
+        elif choice == "1":
+            add_column()
+        elif choice == "2":
+            remove_column()
+        elif choice == "3":
+            rename_column()
 
 
-def menu_analise():
+def menu_basic_analysis():
     while True:
-        cabecalho("ANÁLISE BÁSICA")
-        print(f"{UI_INDENTACAO_1}[1] Ordenar (uma ou múltiplas colunas)")
-        print(f"{UI_INDENTACAO_1}[2] Filtrar / Pesquisar")
-        print(f"{UI_INDENTACAO_1}[3] Ver Início / Fim")
-        print(f"{UI_INDENTACAO_1}[4] Amostra aleatória")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("ANÁLISE BÁSICA")
+        print(f"{UI_INDENT_1}[1] Ordenar (uma ou múltiplas colunas)")
+        print(f"{UI_INDENT_1}[2] Filtrar / Pesquisar")
+        print(f"{UI_INDENT_1}[3] Ver Início / Fim")
+        print(f"{UI_INDENT_1}[4] Amostra aleatória")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "4", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            ordenar()
-        elif escolha == "2":
-            filtrar()
-        elif escolha == "3":
-            ver_inicio_fim()
-        elif escolha == "4":
-            amostra()
+        elif choice == "1":
+            sort_rows()
+        elif choice == "2":
+            filter_rows()
+        elif choice == "3":
+            view_head_tail()
+        elif choice == "4":
+            random_sample()
 
 
-def menu_avancado():
+def menu_advanced():
     while True:
-        cabecalho("ANÁLISE AVANÇADA")
-        print(f"{UI_INDENTACAO_1}[1] Info / Resumo do DataFrame")
-        print(f"{UI_INDENTACAO_1}[2] Agrupar (groupby + agregação)")
-        print(f"{UI_INDENTACAO_1}[3] Duplicados (detectar e remover)")
-        print(f"{UI_INDENTACAO_1}[4] Dados em falta (contar / preencher / remover)")
-        print(f"{UI_INDENTACAO_1}[0] Voltar")
-        print("-" * LARGURA)
+        header("ANÁLISE AVANÇADA")
+        print(f"{UI_INDENT_1}[1] Info / Resumo do DataFrame")
+        print(f"{UI_INDENT_1}[2] Agrupar (groupby + agregação)")
+        print(f"{UI_INDENT_1}[3] Duplicados (detectar e remover)")
+        print(f"{UI_INDENT_1}[4] Dados em falta (contar / preencher / remover)")
+        print(f"{UI_INDENT_1}[0] Voltar")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "0"})
-        if escolha == "0":
+        choice = ask_option({"1", "2", "3", "4", "0"})
+        if choice == "0":
             break
-        elif escolha == "1":
-            info_resumo()
-        elif escolha == "2":
-            agrupar()
-        elif escolha == "3":
-            duplicados()
-        elif escolha == "4":
-            dados_em_falta()
+        elif choice == "1":
+            info_summary()
+        elif choice == "2":
+            group_by()
+        elif choice == "3":
+            duplicates()
+        elif choice == "4":
+            missing_data()
 
 
 # Ecrã "Sobre" com informação da aplicação
-def sobre():
-    cabecalho("SOBRE")
-    print(f"{UI_INDENTACAO_1}{NOME_APP}  —  Folha de Cálculo em Linha de Comando")
+def about():
+    header("SOBRE")
+    print(f"{UI_INDENT_1}{APP_NAME}  —  Folha de Cálculo em Linha de Comando")
     print()
-    print(f"{UI_INDENTACAO_1}Versão   : {VERSAO_APP}")
-    print(f"{UI_INDENTACAO_1}Autor    : {AUTOR_APP}")
-    print(f"{UI_INDENTACAO_1}Licença  : MIT License")
+    print(f"{UI_INDENT_1}Versão   : {APP_VERSION}")
+    print(f"{UI_INDENT_1}Autor    : {APP_AUTHOR}")
+    print(f"{UI_INDENT_1}Licença  : MIT License")
     print()
-    print(f"{UI_INDENTACAO_1}Funcionalidades:")
-    print(f"{UI_INDENTACAO_2}- Criar, editar, filtrar e analisar dados")
-    print(f"{UI_INDENTACAO_2}- Tipos: texto, inteiro, decimal, data")
-    print(f"{UI_INDENTACAO_2}- Estatísticas e análise avançada (groupby, duplicados)")
-    print(f"{UI_INDENTACAO_2}- Gráficos: barras, linhas, circular, dispersão, área,")
-    print(f"{UI_INDENTACAO_2}  histograma, boxplot, heatmap, tendência polinomial")
-    print(f"{UI_INDENTACAO_2}- Importar / Exportar Excel e CSV; exportar Word e PDF")
-    print(f"{UI_INDENTACAO_2}- Undo / Redo e gravação automática de estado")
+    print(f"{UI_INDENT_1}Funcionalidades:")
+    print(f"{UI_INDENT_2}- Criar, editar, filtrar e analisar dados")
+    print(f"{UI_INDENT_2}- Tipos: texto, inteiro, decimal, data")
+    print(f"{UI_INDENT_2}- Estatísticas e análise avançada (groupby, duplicados)")
+    print(f"{UI_INDENT_2}- Gráficos: barras, linhas, circular, dispersão, área,")
+    print(f"{UI_INDENT_2}  histograma, boxplot, heatmap, tendência polinomial")
+    print(f"{UI_INDENT_2}- Importar / Exportar Excel e CSV; exportar Word e PDF")
+    print(f"{UI_INDENT_2}- Undo / Redo e gravação automática de estado")
     print()
-    print(f"{UI_INDENTACAO_1}Requisitos: Python 3.x · pandas · numpy · matplotlib · python-docx · fpdf2")
-    print("-" * LARGURA)
-    pausar()
+    print(f"{UI_INDENT_1}Requisitos: Python 3.x · pandas · numpy · matplotlib · python-docx · fpdf2")
+    print("-" * WIDTH)
+    pause()
 
 
 # Ponto de entrada: menu principal e ciclo da aplicação
-def configurar_log():
+def configure_log():
     """Regista erros em .termifolha.log (rotativo). Chamado só em main(): importar o módulo não cria ficheiros."""
     from logging.handlers import RotatingFileHandler
     try:
-        handler = RotatingFileHandler(FICHEIRO_LOG, maxBytes=256 * 1024, backupCount=1, encoding="utf-8")
+        handler = RotatingFileHandler(LOG_FILE, maxBytes=256 * 1024, backupCount=1, encoding="utf-8")
     except OSError:
         return  # sem permissões de escrita: a aplicação funciona na mesma, sem registo
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -2457,53 +2457,53 @@ def configurar_log():
 
 
 def main():
-    global tabela, tipos
+    global table, col_types
 
-    configurar_log()
-    carregar_estado()
+    configure_log()
+    load_state()
 
-    if not undo:
-        undo.append((tabela.copy(), tipos.copy()))
+    if not undo_stack:
+        undo_stack.append((table.copy(), col_types.copy()))
 
     while True:
-        cabecalho("MENU PRINCIPAL")
-        print(f"{UI_INDENTACAO_1}[1] Folha            (nova, importar, exportar, dummy, limpar)")
-        print(f"{UI_INDENTACAO_1}[2] Linhas           (adicionar, editar, remover)")
-        print(f"{UI_INDENTACAO_1}[3] Colunas          (adicionar, remover, renomear)")
-        print(f"{UI_INDENTACAO_1}[4] Análise Básica   (ordenar, filtrar, início/fim, amostra)")
-        print(f"{UI_INDENTACAO_1}[5] Estatísticas     (8 métodos pandas)")
-        print(f"{UI_INDENTACAO_1}[6] Análise Avançada (info, groupby, duplicados, missing)")
-        print(f"{UI_INDENTACAO_1}[7] Gráficos         (matplotlib + numpy)")
-        print(f"{UI_INDENTACAO_1}[S] Sobre")
-        print(f"{UI_INDENTACAO_1}[U] Desfazer  [{len(undo) - 1} passo(s)]")
-        print(f"{UI_INDENTACAO_1}[R] Refazer   [{len(redo)} passo(s)]")
-        print(f"{UI_INDENTACAO_1}[Q] Sair")
-        print("-" * LARGURA)
+        header("MENU PRINCIPAL")
+        print(f"{UI_INDENT_1}[1] Folha            (nova, importar, exportar, dummy, limpar)")
+        print(f"{UI_INDENT_1}[2] Linhas           (adicionar, editar, remover)")
+        print(f"{UI_INDENT_1}[3] Colunas          (adicionar, remover, renomear)")
+        print(f"{UI_INDENT_1}[4] Análise Básica   (ordenar, filtrar, início/fim, amostra)")
+        print(f"{UI_INDENT_1}[5] Estatísticas     (8 métodos pandas)")
+        print(f"{UI_INDENT_1}[6] Análise Avançada (info, groupby, duplicados, missing)")
+        print(f"{UI_INDENT_1}[7] Gráficos         (matplotlib + numpy)")
+        print(f"{UI_INDENT_1}[S] Sobre")
+        print(f"{UI_INDENT_1}[U] Desfazer  [{len(undo_stack) - 1} passo(s)]")
+        print(f"{UI_INDENT_1}[R] Refazer   [{len(redo_stack)} passo(s)]")
+        print(f"{UI_INDENT_1}[Q] Sair")
+        print("-" * WIDTH)
 
-        escolha = pedir_opcao({"1", "2", "3", "4", "5", "6", "7", "S", "U", "R", "Q"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "S", "U", "R", "Q"})
 
-        if escolha == "1":
-            menu_folha()
-        elif escolha == "2":
-            menu_linhas()
-        elif escolha == "3":
-            menu_colunas()
-        elif escolha == "4":
-            menu_analise()
-        elif escolha == "5":
-            estatisticas()
-        elif escolha == "6":
-            menu_avancado()
-        elif escolha == "7":
-            menu_graficos()
-        elif escolha == "S":
-            sobre()
-        elif escolha == "U":
-            desfazer()
-        elif escolha == "R":
-            refazer()
-        elif escolha == "Q":
-            limpar()
+        if choice == "1":
+            menu_sheet()
+        elif choice == "2":
+            menu_rows()
+        elif choice == "3":
+            menu_columns()
+        elif choice == "4":
+            menu_basic_analysis()
+        elif choice == "5":
+            statistics_menu()
+        elif choice == "6":
+            menu_advanced()
+        elif choice == "7":
+            menu_charts()
+        elif choice == "S":
+            about()
+        elif choice == "U":
+            undo_last()
+        elif choice == "R":
+            redo_last()
+        elif choice == "Q":
+            clear_screen()
             print("Obrigado por usar o TermiFolha. Até à próxima!")
             break
 

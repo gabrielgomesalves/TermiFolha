@@ -1,7 +1,7 @@
-def _filtrar_texto(app, capsys, op, termo="lisboa"):
+def _filtrar_texto(app, capsys, op, term="lisboa"):
     app.dummy()
     capsys.readouterr()
-    app.run(app.m.filtrar, "cidade", op, termo)
+    app.run(app.m.filter_rows, "cidade", op, term)
     return capsys.readouterr().out
 
 
@@ -27,11 +27,11 @@ def test_filtro_de_texto_igual_a(app, capsys):
 
 def test_filtro_contem_trata_caracteres_especiais_como_texto_literal(app, capsys):
     """O termo não pode ser interpretado como expressão regular (`(` rebentava)."""
-    app.m.tabela = app.m.pd.DataFrame({"Nota": ["a (b)", "c++", "plain"]})
-    app.m.tipos = {"Nota": str}
+    app.m.table = app.m.pd.DataFrame({"Nota": ["a (b)", "c++", "plain"]})
+    app.m.col_types = {"Nota": str}
 
-    app.run(app.m.filtrar, "nota", "1", "(")
+    app.run(app.m.filter_rows, "nota", "1", "(")
     assert "1 resultado(s)" in capsys.readouterr().out
 
-    app.run(app.m.filtrar, "nota", "1", "c++")
+    app.run(app.m.filter_rows, "nota", "1", "c++")
     assert "1 resultado(s)" in capsys.readouterr().out

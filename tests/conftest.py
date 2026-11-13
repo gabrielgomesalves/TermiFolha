@@ -33,21 +33,21 @@ class App:
         return func()
 
     def dummy(self):
-        self.run(self.m.criar_folha_dummy)
+        self.run(self.m.create_dummy_sheet)
 
 
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(app_module, "limpar", lambda: None)
-    monkeypatch.setattr(app_module, "pausar", lambda: None)
-    monkeypatch.setattr(app_module, "FICHEIRO_ESTADO", str(tmp_path / "estado.json"))
-    monkeypatch.setattr(app_module, "FICHEIRO_ESTADO_LEGADO", str(tmp_path / "estado.pkl"))
-    monkeypatch.setattr(app_module, "tabela", app_module.pd.DataFrame())
-    monkeypatch.setattr(app_module, "tipos", {})
-    app_module.undo.clear()
-    app_module.redo.clear()
-    app_module.undo.append((app_module.tabela.copy(), {}))
+    monkeypatch.setattr(app_module, "clear_screen", lambda: None)
+    monkeypatch.setattr(app_module, "pause", lambda: None)
+    monkeypatch.setattr(app_module, "STATE_FILE", str(tmp_path / "estado.json"))
+    monkeypatch.setattr(app_module, "LEGACY_STATE_FILE", str(tmp_path / "estado.pkl"))
+    monkeypatch.setattr(app_module, "table", app_module.pd.DataFrame())
+    monkeypatch.setattr(app_module, "col_types", {})
+    app_module.undo_stack.clear()
+    app_module.redo_stack.clear()
+    app_module.undo_stack.append((app_module.table.copy(), {}))
     yield App(app_module, monkeypatch)
-    app_module.undo.clear()
-    app_module.redo.clear()
+    app_module.undo_stack.clear()
+    app_module.redo_stack.clear()
