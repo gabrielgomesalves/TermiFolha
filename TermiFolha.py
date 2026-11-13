@@ -282,6 +282,9 @@ def header(subtitle="MENU PRINCIPAL"):
         state_text = "folha vazia"
     else:
         state_text = f"{len(table.columns)} coluna(s)  |  {len(table)} linha(s)"
+    names = sheet_names()
+    if len(names) > 1:
+        state_text += f"  |  folha '{active_name}' ({names.index(active_name) + 1}/{len(names)})"
     print(f"{UI_INDENT_1}Estado: {state_text}")
     print("-" * WIDTH)
     print()
@@ -962,8 +965,13 @@ def import_excel():
         name += EXT_EXCEL
 
     try:
-        adopt_dataframe(pd.read_excel(name), ask_integers=True)
-        print(f"\n{UI_INDENT_1}'{name}' importado: {len(table)} linhas, {len(table.columns)} colunas.")
+        frames = pd.read_excel(name, sheet_name=None)
+        if len(frames) == 1:
+            adopt_dataframe(next(iter(frames.values())), ask_integers=True)
+        else:
+            adopt_workbook(frames, ask_integers=True)
+        suffix = f" ({len(frames)} folhas)" if len(frames) > 1 else ""
+        print(f"\n{UI_INDENT_1}'{name}' importado{suffix}: {len(table)} linhas, {len(table.columns)} colunas na folha activa.")
     except FileNotFoundError:
         print(f"\n{UI_INDENT_1}Ficheiro '{name}' não encontrado.")
     except Exception as e:
@@ -978,13 +986,8 @@ def _integers_with_gaps(series):
     return pd.api.types.is_float_dtype(series) and 0 < len(valid_values) < len(series) and bool((valid_values % 1 == 0).all())
 
 
-def adopt_dataframe(df, detect_dates=False, ask_integers=False):
-    """Torna `df` a folha activa (importação de Excel/CSV).
-
-    O estado global só é alterado no fim, por isso uma falha a meio não deixa
-    a folha actual meio substituída.
-    """
-    global table, col_types, meta
+def _prepare_dataframe(df, detect_dates=False, ask_integers=False):
+    """Normaliza um DataFrame importado e infere os tipos das colunas. Devolve (df, tipos); não toca no estado global."""
     df = df.copy()
     # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
     df.columns = [str(c) for c in df.columns]
@@ -999,9 +1002,29 @@ def adopt_dataframe(df, detect_dates=False, ask_integers=False):
                 dates = _as_dates(df[col])
                 if dates is not None:
                     df[col] = dates
-    new_col_types = {col: infer_type(df[col]) for col in df.columns}
-    table, col_types, meta = df, new_col_types, new_meta()
+    return df, {col: infer_type(df[col]) for col in df.columns}
+
+
+def adopt_dataframe(df, detect_dates=False, ask_integers=False):
+    """Torna `df` a folha activa (importação de Excel/CSV).
+
+    O estado global só é alterado no fim, por isso uma falha a meio não deixa
+    a folha actual meio substituída.
+    """
+    global table, col_types, meta
+    prepared, new_col_types = _prepare_dataframe(df, detect_dates, ask_integers)
+    table, col_types, meta = prepared, new_col_types, new_meta()
     apply_types()
+    commit()
+
+
+def adopt_workbook(frames, detect_dates=False, ask_integers=False):
+    """Substitui o livro inteiro: cada item de `frames` ({nome: DataFrame}) passa a ser uma folha; a primeira fica activa."""
+    prepared = []
+    for name, df in frames.items():
+        data, types = _prepare_dataframe(df, detect_dates, ask_integers)
+        prepared.append((name, data, types, new_meta()))
+    _install_workbook(prepared, prepared[0][0], dict(settings))
     commit()
 
 
@@ -1291,6 +1314,16 @@ def export_pdf():
     pause()
 
 
+def write_excel(path, all_sheets=False):
+    """Grava a folha activa (ou todas, cada uma num separador) em Excel."""
+    if not all_sheets:
+        table.to_excel(path, index=False)
+        return
+    with pd.ExcelWriter(path) as writer:
+        for name in sheet_names():
+            get_sheet(name)["table"].to_excel(writer, sheet_name=name, index=False)
+
+
 def export_excel():
     if table.columns.empty:
         print(f"{UI_INDENT_1}Sem dados para exportar.")
@@ -1307,7 +1340,8 @@ def export_excel():
         name += EXT_EXCEL
 
     try:
-        table.to_excel(name, index=False)
+        all_sheets = len(sheet_names()) > 1 and confirm("Exportar todas as folhas do livro (cada uma num separador)?")
+        write_excel(name, all_sheets)
         print(f"\n{UI_INDENT_1}Exportado para '{name}'.")
     except Exception as e:
         log.exception("Falha em export_excel")
@@ -3297,6 +3331,347 @@ def freeze_formula():
     pause()
 
 
+# Livro de folhas: escolher, adicionar, renomear, eliminar, duplicar, juntar, empilhar e tabela dinâmica
+def ask_sheet(message, exclude=None):
+    """Pede uma folha pelo nome ou número. Devolve o nome, ou None se cancelar/inválido."""
+    names = [n for n in sheet_names() if n != exclude]
+    print(f"{UI_INDENT_1}Folhas: " + ", ".join(f"[{sheet_names().index(n) + 1}] {n}" for n in names))
+    value = input(f"{UI_INDENT_1}{message} (nome ou nº, 'sair' cancela): ").strip()
+    if not value or value.lower() == "sair":
+        return None
+    if value.isdigit() and 1 <= int(value) <= len(sheet_names()) and sheet_names()[int(value) - 1] in names:
+        return sheet_names()[int(value) - 1]
+    chosen = resolve_column(value, source=names)
+    if chosen is None:
+        print(f"{UI_INDENT_1}Folha não existe.")
+        pause()
+    return chosen
+
+
+def _ask_sheet_name(message):
+    """Pede um nome de folha válido e livre. Devolve None se cancelar."""
+    while True:
+        name = input(f"{UI_INDENT_1}{message} ('sair' cancela): ").strip()
+        if not name or name.lower() == "sair":
+            return None
+        error = sheet_name_error(name)
+        if error is None:
+            return name
+        print(f"{UI_INDENT_1}Nome inválido: {error}.")
+
+
+def switch_sheet_ui():
+    name = ask_sheet("Mudar para")
+    if name is not None and name != active_name:
+        switch_sheet(name)
+        commit()
+
+
+def add_blank_sheet():
+    name = _ask_sheet_name("Nome da nova folha")
+    if name is None:
+        return
+    previous = active_name
+    add_sheet(name)
+    new_sheet()
+    if table.columns.empty:  # o utilizador cancelou a definição das colunas: não deixa uma folha vazia para trás
+        switch_sheet(previous)
+        delete_sheet(name)
+        save_state()
+
+
+def rename_sheet_ui():
+    old = ask_sheet("Folha a renomear")
+    if old is None:
+        return
+    new = _ask_sheet_name(f"Novo nome para '{old}'")
+    if new is None:
+        return
+    try:
+        rename_sheet(old, new)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}Nome inválido: {e}.")
+        pause()
+        return
+    commit()
+    print(f"\n{UI_INDENT_1}'{old}' renomeada para '{new}'.")
+    pause()
+
+
+def delete_sheet_ui():
+    if len(sheet_names()) <= 1:
+        print(f"{UI_INDENT_1}O livro tem de ter pelo menos uma folha.")
+        pause()
+        return
+    name = ask_sheet("Folha a eliminar")
+    if name is None or not confirm(f"Eliminar a folha '{name}' e os seus dados?"):
+        return
+    delete_sheet(name)
+    commit()
+    print(f"\n{UI_INDENT_1}Folha '{name}' eliminada (pode desfazer com [U]).")
+    pause()
+
+
+def duplicate_sheet_ui():
+    source = ask_sheet("Folha a duplicar")
+    if source is None:
+        return
+    new = _ask_sheet_name("Nome da cópia")
+    if new is None:
+        return
+    duplicate_sheet(source, new)
+    commit()
+    print(f"\n{UI_INDENT_1}Cópia '{new}' criada e activa.")
+    pause()
+
+
+_MERGE_KINDS = {"1": ("inner", "só as linhas com chave nas duas folhas"), "2": ("left", "todas as da folha activa"), "3": ("right", "todas as da outra folha"), "4": ("outer", "todas")}
+MAX_MERGE_ROWS = 1_000_000
+
+
+def merge_tables(left_name, right_name, left_key, right_key, how):
+    """Junta duas folhas por uma coluna chave. Devolve (tabela, tipos). Levanta ValueError se não for possível.
+
+    As colunas da direita com o nome de uma da esquerda recebem o sufixo `_<folha da direita>`.
+    """
+    left, right = get_sheet(left_name), get_sheet(right_name)
+    left_types, right_types = left["types"], right["types"]
+    numeric = (int, float)
+    kl, kr = left_types.get(left_key, str), right_types.get(right_key, str)
+    if kl != kr and not (kl in numeric and kr in numeric):
+        raise ValueError(f"as chaves têm tipos diferentes ({TYPE_NAME.get(kl)} e {TYPE_NAME.get(kr)}); converta uma delas primeiro")
+
+    taken = {str(c).lower() for c in left["table"].columns}
+    rename, new_right_names = {}, []
+    for col in right["table"].columns:
+        if col == right_key and left_key == right_key:
+            new_right_names.append(col)
+            continue
+        new = col
+        if col.lower() in taken:
+            new = f"{col}_{right_name}"
+            while new.lower() in taken:
+                new += "_"
+        rename[col] = new
+        taken.add(new.lower())
+        new_right_names.append(new)
+    right_data = right["table"].rename(columns=rename)
+    right_key_name = rename.get(right_key, right_key)
+
+    left_counts = left["table"].groupby(left_key).size()
+    right_counts = right_data.groupby(right_key_name).size()
+    pairs = int((left_counts.reindex(right_counts.index, fill_value=0) * right_counts).sum()) + len(left["table"]) + len(right_data)
+    if pairs > MAX_MERGE_ROWS:
+        raise ValueError("a junção produziria demasiadas linhas (a chave tem muitos valores repetidos nas duas folhas)")
+
+    merged = pd.merge(left["table"], right_data, how=how, left_on=left_key, right_on=right_key_name)
+    types = dict(left_types)
+    types.update({rename.get(c, c): right_types.get(c, str) for c in right["table"].columns})
+    if right_key_name == left_key:
+        types[left_key] = kl if kl == kr else float
+    elif kl != kr:
+        types[left_key] = types[right_key_name] = float
+    merged = typed_frame(merged, types)
+    return merged, {c: types.get(c, infer_type(merged[c])) for c in merged.columns}
+
+
+def merge_sheets_ui():
+    if len(sheet_names()) < 2:
+        print(f"{UI_INDENT_1}São precisas pelo menos duas folhas (adicione ou importe outra).")
+        pause()
+        return
+    header("JUNTAR TABELAS (JOIN)")
+    print(f"{UI_INDENT_1}Folha da esquerda: '{active_name}'\n")
+    right_name = ask_sheet("Folha da direita", exclude=active_name)
+    if right_name is None:
+        return
+    print(f"{UI_INDENT_1}Colunas de '{active_name}': {', '.join(table.columns)}")
+    left_key = resolve_column(input(f"{UI_INDENT_1}Coluna chave em '{active_name}': ").strip())
+    right_columns = list(get_sheet(right_name)["table"].columns)
+    print(f"{UI_INDENT_1}Colunas de '{right_name}': {', '.join(right_columns)}")
+    right_key = resolve_column(input(f"{UI_INDENT_1}Coluna chave em '{right_name}': ").strip(), source=right_columns)
+    if left_key is None or right_key is None:
+        print(f"{UI_INDENT_1}Coluna não existe.")
+        pause()
+        return
+    print(f"{UI_INDENT_1}Manter: " + "  ".join(f"[{k}] {desc}" for k, (_, desc) in _MERGE_KINDS.items()))
+    how = _MERGE_KINDS.get(input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() or "1")
+    if how is None:
+        print(f"{UI_INDENT_1}Opção inválida.")
+        pause()
+        return
+    try:
+        merged, types = merge_tables(active_name, right_name, left_key, right_key, how[0])
+    except ValueError as e:
+        print(f"\n{UI_INDENT_1}{e}.")
+        pause()
+        return
+    name = unique_sheet_name(f"{active_name}+{right_name}")
+    add_sheet(name, merged, types)
+    commit()
+    print(f"\n{UI_INDENT_1}Criada a folha '{name}' com {len(merged)} linhas e {len(merged.columns)} colunas (as originais não mudam).")
+    pause()
+
+
+def concat_tables(first_name, second_name):
+    """Empilha as linhas de duas folhas. As colunas são unidas pelo nome (sem distinguir maiúsculas); as que faltam ficam em branco.
+
+    Se uma coluna tiver tipos diferentes: inteiro+decimal dá decimal, qualquer outro caso dá texto.
+    Devolve (tabela, tipos, colunas convertidas para texto).
+    """
+    sources = [get_sheet(first_name), get_sheet(second_name)]
+    names = []  # união pela ordem de aparecimento
+    for source in sources:
+        for col in source["table"].columns:
+            if resolve_column(col, source=names) is None:
+                names.append(col)
+    final_types, to_text = {}, []
+    for col in names:
+        found = {sh["types"].get(c, str) for sh in sources for c in sh["table"].columns if c.lower() == col.lower()}
+        if len(found) == 1:
+            final_types[col] = found.pop()
+        elif found == {int, float}:
+            final_types[col] = float
+        else:
+            final_types[col] = str
+            to_text.append(col)
+    frames = []
+    for source in sources:
+        data = source["table"]
+        part = pd.DataFrame(index=data.index)
+        for col in names:
+            actual = resolve_column(col, source=data.columns)
+            if actual is None:
+                part[col] = pd.Series(np.nan, index=data.index, dtype="object")
+            elif final_types[col] is str and source["types"].get(actual, str) is not str:
+                part[col] = convert_series(data[actual], source["types"].get(actual, str), str)[0]
+            else:
+                part[col] = data[actual]
+        frames.append(part)
+    result = typed_frame(pd.concat(frames, ignore_index=True), final_types) if names else pd.DataFrame()
+    return result, final_types, to_text
+
+
+def concat_sheets_ui():
+    if len(sheet_names()) < 2:
+        print(f"{UI_INDENT_1}São precisas pelo menos duas folhas (adicione ou importe outra).")
+        pause()
+        return
+    header("EMPILHAR FOLHAS (CONCATENAR)")
+    print(f"{UI_INDENT_1}As linhas da outra folha ficam por baixo das de '{active_name}'.\n")
+    other = ask_sheet("Outra folha", exclude=active_name)
+    if other is None:
+        return
+    result, types, to_text = concat_tables(active_name, other)
+    if to_text:
+        print(f"{UI_INDENT_1}Aviso: tipos diferentes em {', '.join(to_text)}; essas colunas passam a texto.")
+        if not confirm("Continuar?"):
+            return
+    name = unique_sheet_name(f"{active_name}+{other}")
+    add_sheet(name, result, types)
+    commit()
+    print(f"\n{UI_INDENT_1}Criada a folha '{name}' com {len(result)} linhas (as originais não mudam).")
+    pause()
+
+
+def menu_workbook():
+    while True:
+        header("FOLHAS (SEPARADORES)")
+        for i, name in enumerate(sheet_names(), start=1):
+            data = get_sheet(name)["table"]
+            print(f"{UI_INDENT_2}{'*' if name == active_name else ' '} [{i}] {name}  ({len(data)} linhas × {len(data.columns)} colunas)")
+        print()
+        print(f"{UI_INDENT_1}[M] Mudar de folha   [A] Adicionar folha   [R] Renomear   [E] Eliminar   [D] Duplicar")
+        print(f"{UI_INDENT_1}[J] Juntar tabelas (join)   [C] Empilhar folhas (concatenar)   [0] Voltar")
+        print("-" * WIDTH)
+        choice = ask_option({"M", "A", "R", "E", "D", "J", "C", "0"})
+        if choice == "0":
+            break
+        {"M": switch_sheet_ui, "A": add_blank_sheet, "R": rename_sheet_ui, "E": delete_sheet_ui,
+         "D": duplicate_sheet_ui, "J": merge_sheets_ui, "C": concat_sheets_ui}[choice]()
+
+
+# Tabela dinâmica (pivot)
+_PIVOT_FUNCTIONS = {"1": ("sum", "soma"), "2": ("mean", "média"), "3": ("count", "contagem"), "4": ("min", "mínimo"), "5": ("max", "máximo")}
+
+
+def _unique_labels(labels):
+    """Nomes de coluna como texto, sem repetições (acrescenta _2, _3... ao que se repetir)."""
+    seen, result = set(), []
+    for label in map(str, labels):
+        candidate, n = label, 2
+        while candidate.lower() in seen:
+            candidate = f"{label}_{n}"
+            n += 1
+        seen.add(candidate.lower())
+        result.append(candidate)
+    return result
+
+
+def pivot_data(index_col, columns_col, value_col, function, totals=False):
+    """Tabela dinâmica da folha activa: linhas = `index_col`, colunas = valores de `columns_col` (opcional), células = `function` de `value_col`.
+
+    Devolve (tabela, tipos). Levanta ValueError se as colunas forem repetidas ou `function` for desconhecida.
+    """
+    if function not in {f for f, _ in _PIVOT_FUNCTIONS.values()}:
+        raise ValueError(f"função desconhecida: {function}")
+    if len({c for c in (index_col, columns_col, value_col) if c is not None}) != len([c for c in (index_col, columns_col, value_col) if c is not None]):
+        raise ValueError("as colunas das linhas, das colunas e dos valores têm de ser diferentes")
+    result = pd.pivot_table(table, index=index_col, columns=columns_col, values=value_col, aggfunc=function, margins=totals, margins_name="Total", observed=True)
+    if isinstance(result, pd.Series):
+        result = result.to_frame(value_col)
+    result = result.reset_index()
+    result.columns = _unique_labels(result.columns)
+    return result, {c: infer_type(result[c]) for c in result.columns}
+
+
+def pivot_table_ui():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    header("TABELA DINÂMICA")
+    print()
+    index_col = ask_column("Coluna para as linhas")
+    if index_col is None:
+        return
+    columns_col = None
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    value = input(f"{UI_INDENT_1}Coluna para as colunas (Enter = nenhuma): ").strip()
+    if value.lower() == "sair":
+        return
+    if value:
+        columns_col = resolve_column(value)
+        if columns_col is None:
+            print(f"{UI_INDENT_1}Coluna não existe.")
+            pause()
+            return
+    value_col = ask_numeric_column("Coluna numérica dos valores")
+    if value_col is None:
+        return
+    print(f"{UI_INDENT_1}Função: " + "  ".join(f"[{k}] {label.capitalize()}" for k, (_, label) in _PIVOT_FUNCTIONS.items()))
+    function = _PIVOT_FUNCTIONS.get(input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() or "1")
+    if function is None:
+        print(f"{UI_INDENT_1}Opção inválida.")
+        pause()
+        return
+    totals = confirm("Incluir totais?")
+    try:
+        result, types = pivot_data(index_col, columns_col, value_col, function[0], totals)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
+    print()
+    draw_data_table(result.head(DISPLAY_ROW_LIMIT))
+    if confirm("Guardar como nova folha?"):
+        name = unique_sheet_name("Dinamica")
+        add_sheet(name, result, types)
+        commit()
+        print(f"\n{UI_INDENT_1}Criada a folha '{name}'.")
+    pause()
+
+
 # Apresentação: formatos, colunas visíveis, páginas e linha de totais
 def format_column():
     if table.columns.empty:
@@ -3547,10 +3922,11 @@ def menu_advanced():
         print(f"{UI_INDENT_1}[2] Agrupar (groupby + agregação)")
         print(f"{UI_INDENT_1}[3] Duplicados (detectar e remover)")
         print(f"{UI_INDENT_1}[4] Dados em falta (contar / preencher / remover)")
+        print(f"{UI_INDENT_1}[5] Tabela dinâmica (pivot)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3561,6 +3937,8 @@ def menu_advanced():
             duplicates()
         elif choice == "4":
             missing_data()
+        elif choice == "5":
+            pivot_table_ui()
 
 
 # Ecrã "Sobre" com informação da aplicação
@@ -3617,13 +3995,14 @@ def main():
         print(f"{UI_INDENT_1}[5] Estatísticas     (8 métodos pandas)")
         print(f"{UI_INDENT_1}[6] Análise Avançada (info, groupby, duplicados, missing)")
         print(f"{UI_INDENT_1}[7] Gráficos         (matplotlib + numpy)")
+        print(f"{UI_INDENT_1}[8] Folhas           (separadores, juntar, empilhar)")
         print(f"{UI_INDENT_1}[S] Sobre")
         print(f"{UI_INDENT_1}[U] Desfazer  [{len(undo_stack) - 1} passo(s)]")
         print(f"{UI_INDENT_1}[R] Refazer   [{len(redo_stack)} passo(s)]")
         print(f"{UI_INDENT_1}[Q] Sair")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "S", "U", "R", "Q"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "S", "U", "R", "Q"})
 
         if choice == "1":
             menu_sheet()
@@ -3639,6 +4018,8 @@ def main():
             menu_advanced()
         elif choice == "7":
             menu_charts()
+        elif choice == "8":
+            menu_workbook()
         elif choice == "S":
             about()
         elif choice == "U":
