@@ -147,6 +147,32 @@ def format_number(val):
     return str(val)
 
 
+# Formatação de valores para apresentação (não altera os dados)
+FORMAT_DECIMALS_MAX = 10
+
+
+def apply_number_format(value, fmt):
+    """Formata um número segundo `fmt`: decimals (0-10), thousands (bool), locale ("intl" 1,234.50 | "pt" 1 234,50), prefix, suffix."""
+    decimals = fmt.get("decimals", 2)
+    if not isinstance(decimals, int) or isinstance(decimals, bool) or not 0 <= decimals <= FORMAT_DECIMALS_MAX:
+        decimals = 2
+    text = f"{value:,.{decimals}f}" if fmt.get("thousands") else f"{value:.{decimals}f}"
+    if fmt.get("locale") == "pt":
+        text = text.replace(",", "\x00").replace(".", ",").replace("\x00", " ")
+    return f"{fmt.get('prefix', '')}{text}{fmt.get('suffix', '')}"
+
+
+def format_cell(col, val):
+    """Valor de uma célula tal como aparece no ecrã: aplica o formato da coluna (se existir) aos números."""
+    fmt = meta["formats"].get(col)
+    if fmt and not pd.isna(val) and isinstance(val, (int, float, np.integer, np.floating)) and not isinstance(val, bool):
+        try:
+            return apply_number_format(val, fmt)
+        except (TypeError, ValueError):
+            log.warning("Formato inválido na coluna %r: %r", col, fmt)
+    return format_value(val)
+
+
 # Desenho da tabela e cabeçalho no terminal
 def column_widths(data):
     widths = {}
@@ -154,20 +180,23 @@ def column_widths(data):
         w = len(str(col))
         if not data.empty:
             for idx in data.index:
-                v = data.at[idx, col]
-                disp_len = len(format_value(v))
+                disp_len = len(format_cell(col, data.at[idx, col]))
                 if disp_len > w:
                     w = disp_len
         widths[col] = min(w, COLUMN_WIDTH_LIMIT)
     return widths
 
 
-def draw_data_table(data):
+def draw_data_table(data, totals=None):
+    """Desenha `data`; `totals` (coluna -> texto) acrescenta uma linha de totais sob a tabela."""
     if data.columns.empty:
         print(f"{UI_INDENT_1}(tabela vazia — crie uma folha primeiro)")
         return
 
     widths = column_widths(data)
+    if totals:
+        for col in data.columns:
+            widths[col] = max(widths[col], min(len(totals.get(col, "")), COLUMN_WIDTH_LIMIT))
     index_width = max(3, len(str(len(data))))
 
     head_line = UI_INDENT_1 + "#".rjust(index_width) + " |"
@@ -182,19 +211,63 @@ def draw_data_table(data):
 
     if data.empty:
         print(UI_INDENT_1 + " " * index_width + f"{UI_INDENT_1}(sem linhas)")
-        return
-
     for idx in data.index:
         line = UI_INDENT_1 + str(idx).rjust(index_width) + " |"
         for col in data.columns:
-            val = data.at[idx, col]
-            shown = truncate(format_value(val), widths[col])
+            shown = truncate(format_cell(col, data.at[idx, col]), widths[col])
             line += " " + shown.ljust(widths[col]) + " |"
         print(line)
 
+    if totals:
+        print(sep)
+        line = UI_INDENT_1 + "Σ".rjust(index_width) + " |"
+        for col in data.columns:
+            line += " " + truncate(totals.get(col, ""), widths[col]).ljust(widths[col]) + " |"
+        print(line)
+
+
+def visible_columns():
+    """Colunas a mostrar, pela ordem escolhida (todas se não houver escolha)."""
+    chosen = [c for c in meta["visible"] if c in table.columns]
+    return chosen or list(table.columns)
+
+
+_TOTALS_LABELS = {"sum": "soma", "mean": "média", "count": "contagem", "min": "mínimo", "max": "máximo"}
+
+
+def totals_row(columns):
+    """Texto da linha de totais por coluna, ou None se não estiver activa. Calcula sobre todas as linhas da folha."""
+    function = meta["totals"]
+    if function not in _TOTALS_FUNCTIONS:
+        return None
+    result = {}
+    for col in columns:
+        series = table[col]
+        if function == "count":
+            result[col] = str(int(series.notna().sum()))
+        elif pd.api.types.is_numeric_dtype(series) and series.notna().any():
+            value = getattr(series, function)()
+            result[col] = format_cell(col, value) if col in meta["formats"] else format_number(value)
+        else:
+            result[col] = ""
+    return result
+
+
+def page_bounds(total, size, page):
+    """(início, fim, nº de páginas) da página `page` (0-based, limitada ao intervalo válido) de `total` linhas."""
+    pages = max(1, -(-total // size))
+    page = min(max(page, 0), pages - 1)
+    return page * size, min(total, (page + 1) * size), pages
+
 
 def draw_table():
-    draw_data_table(table)
+    view = table[visible_columns()] if not table.columns.empty else table
+    hidden = max(0, len(view) - DISPLAY_ROW_LIMIT)
+    draw_data_table(view.head(DISPLAY_ROW_LIMIT), totals_row(list(view.columns)))
+    if hidden:
+        print(f"{UI_INDENT_1}... mais {hidden} linha(s) por mostrar (Análise Básica → Ver por páginas)")
+    if len(view.columns) < len(table.columns):
+        print(f"{UI_INDENT_1}({len(table.columns) - len(view.columns)} coluna(s) oculta(s); Colunas → Colunas visíveis)")
 
 
 def header(subtitle="MENU PRINCIPAL"):
@@ -2558,6 +2631,120 @@ def menu_charts():
             plot_polynomial_trend()
 
 
+# Apresentação: formatos, colunas visíveis, páginas e linha de totais
+def format_column():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    header("FORMATAÇÃO DE VALORES")
+    print()
+    col = ask_numeric_column("Coluna a formatar")
+    if col is None:
+        return
+    current = meta["formats"].get(col)
+    print(f"{UI_INDENT_1}Formato actual: {apply_number_format(1234.5, current) if current else '(nenhum)'}  (exemplo com 1234.5)")
+    print(f"{UI_INDENT_1}[1] Definir formato  [2] Remover formato  [Enter] Cancelar")
+    choice = input(f"{UI_INDENT_1}Opção: ").strip()
+    if choice == "2":
+        meta["formats"].pop(col, None)
+        commit()
+        print(f"\n{UI_INDENT_1}Formato de '{col}' removido.")
+        pause()
+        return
+    if choice != "1":
+        return
+
+    default_decimals = 0 if type_of(col) is int else 2
+    decimals = ask_int_in_range(f"{UI_INDENT_1}Casas decimais 0-{FORMAT_DECIMALS_MAX} (Enter = {default_decimals}): ", 0, FORMAT_DECIMALS_MAX, default_decimals)
+    if decimals is None:
+        return
+    thousands = confirm("Separador de milhares?")
+    print(f"{UI_INDENT_1}Estilo: [1] 1,234.50 (internacional)  [2] 1 234,50 (português)")
+    locale = "pt" if input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() == "2" else "intl"
+    prefix = input(f"{UI_INDENT_1}Prefixo (ex.: '€ ', Enter = nenhum; os espaços contam): ")
+    suffix = input(f"{UI_INDENT_1}Sufixo (ex.: ' €', '%', Enter = nenhum; os espaços contam): ")
+    meta["formats"][col] = {"decimals": decimals, "thousands": thousands, "locale": locale, "prefix": prefix, "suffix": suffix}
+    commit()
+    print(f"\n{UI_INDENT_1}Formato aplicado a '{col}': {apply_number_format(1234.5, meta['formats'][col])}")
+    pause()
+
+
+def choose_visible_columns():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    header("COLUNAS VISÍVEIS")
+    print()
+    print(f"{UI_INDENT_1}Colunas: {', '.join(table.columns)}")
+    print(f"{UI_INDENT_1}Actualmente: {', '.join(visible_columns())}")
+    value = input(f"{UI_INDENT_1}Colunas a mostrar, pela ordem desejada, separadas por vírgula (Enter = todas): ").strip()
+    if value.lower() == "sair":
+        return
+    chosen = []
+    for name in [v.strip() for v in value.split(",") if v.strip()]:
+        col = resolve_column(name)
+        if col is None or col in chosen:
+            print(f"{UI_INDENT_1}Coluna inválida ou repetida: '{name}'.")
+            pause()
+            return
+        chosen.append(col)
+    meta["visible"] = chosen
+    commit()
+    print(f"\n{UI_INDENT_1}{'Todas as colunas visíveis.' if not chosen else 'A mostrar: ' + ', '.join(chosen)} (os dados não mudam)")
+    pause()
+
+
+def view_pages():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    view = table[visible_columns()]
+    size = settings["page_size"]
+    page = 0
+    while True:
+        start, end, pages = page_bounds(len(view), size, page)
+        page = start // size
+        header(f"PÁGINA {page + 1}/{pages}  (linhas {start}-{end - 1} de {len(view)})")
+        print()
+        draw_data_table(view.iloc[start:end], totals_row(list(view.columns)) if page == pages - 1 else None)
+        print()
+        answer = input(f"{UI_INDENT_1}[N] seguinte  [P] anterior  [nº] ir para a página  [sair]: ").strip().lower()
+        if answer in ("sair", "q", "0"):
+            return
+        if answer in ("", "n"):
+            page += 1
+        elif answer == "p":
+            page -= 1
+        elif answer.isdigit():
+            page = int(answer) - 1
+        else:
+            print(f"{UI_INDENT_1}Opção inválida.")
+            pause()
+
+
+def choose_totals():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    header("LINHA DE TOTAIS")
+    print()
+    print(f"{UI_INDENT_1}Mostra uma linha sob a tabela (só apresentação; não altera os dados).")
+    print(f"{UI_INDENT_1}Actual: {_TOTALS_LABELS.get(meta['totals'], 'desligada')}")
+    options = {str(i): f for i, f in enumerate(_TOTALS_FUNCTIONS, start=1)}
+    print(f"{UI_INDENT_1}[0] Desligar  " + "  ".join(f"[{k}] {_TOTALS_LABELS[f].capitalize()}" for k, f in options.items()))
+    choice = input(f"{UI_INDENT_1}Opção: ").strip()
+    if choice != "0" and choice not in options:
+        return
+    meta["totals"] = options.get(choice)
+    commit()
+    print(f"\n{UI_INDENT_1}Linha de totais: {_TOTALS_LABELS.get(meta['totals'], 'desligada')}.")
+    pause()
+
+
 # Menus secundários: folha, linhas, colunas, análise básica e avançada
 def menu_sheet():
     while True:
@@ -2623,10 +2810,12 @@ def menu_columns():
         print(f"{UI_INDENT_1}[1] Adicionar coluna")
         print(f"{UI_INDENT_1}[2] Remover coluna")
         print(f"{UI_INDENT_1}[3] Renomear coluna")
+        print(f"{UI_INDENT_1}[4] Formatação de valores (casas decimais, milhares, €)")
+        print(f"{UI_INDENT_1}[5] Colunas visíveis (escolher e ordenar)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -2635,6 +2824,10 @@ def menu_columns():
             remove_column()
         elif choice == "3":
             rename_column()
+        elif choice == "4":
+            format_column()
+        elif choice == "5":
+            choose_visible_columns()
 
 
 def menu_basic_analysis():
@@ -2644,10 +2837,12 @@ def menu_basic_analysis():
         print(f"{UI_INDENT_1}[2] Filtrar / Pesquisar")
         print(f"{UI_INDENT_1}[3] Ver Início / Fim")
         print(f"{UI_INDENT_1}[4] Amostra aleatória")
+        print(f"{UI_INDENT_1}[5] Ver por páginas")
+        print(f"{UI_INDENT_1}[6] Linha de totais")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -2658,6 +2853,10 @@ def menu_basic_analysis():
             view_head_tail()
         elif choice == "4":
             random_sample()
+        elif choice == "5":
+            view_pages()
+        elif choice == "6":
+            choose_totals()
 
 
 def menu_advanced():
