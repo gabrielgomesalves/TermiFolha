@@ -898,12 +898,15 @@ def adicionar_coluna():
     valores = []
     for idx in tabela.index:
         while True:
-            val = input(f"{UI_INDENTACAO_1}Valor para linha {idx} ({nome_tipo}) ('sair' para cancelar): ").strip()
+            val = input(f"{UI_INDENTACAO_1}Valor para linha {idx} ({nome_tipo}) ('sair' cancela, Enter = em branco): ").strip()
             if val.lower() == "sair":
                 tipos.pop(nome, None)
                 print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
                 pausar()
                 return
+            if not val:
+                valores.append(None)  # em branco = valor em falta (apresentado como "--")
+                break
             try:
                 valores.append(converter(val, tipo))
                 break
