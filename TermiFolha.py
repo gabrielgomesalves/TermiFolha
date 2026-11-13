@@ -28,13 +28,13 @@
 # - Importar e exportar Excel e CSV; exportar Word e PDF
 # - Undo/Redo e guardar automático do estado (JSON)
 #
-# Requisitos: Python 3.11+, numpy, pandas, matplotlib, openpyxl, python-docx, fpdf2 (ver requirements.txt)
+# Requisitos: Python 3.12+, numpy, pandas, matplotlib, openpyxl, python-docx, fpdf2 (ver requirements.txt)
 #
 # Uso: Execute o script e siga as instruções no terminal para interagir com a folha de cálculo.
 #
 # Nota: Este código é um exemplo de implementação e pode ser expandido com mais funcionalidades ou melhorias na interface.
 #
-# Copyright (c) 2026 Gabriel Gomes Alves. Todos os direitos reservados.
+# Copyright (c) 2026 Gabriel Gomes Alves.
 #
 # Licença: MIT License (https://opensource.org/licenses/MIT)
 #

@@ -11,7 +11,7 @@ pip install -r requirements.txt
 python TermiFolha.py
 ```
 
-Testado em Python 3.13. O pandas 3 exige 3.11 ou superior.
+Usa sempre as versões mais recentes das dependências (ver `requirements.txt`). Testado em Python 3.13 e 3.15; o numpy 2.5 exige Python 3.12 ou superior.
 
 > `fpdf2` e o pacote antigo `fpdf` instalam ambos o módulo `fpdf` e **não devem coexistir**. Se o `pip list` mostrar `fpdf`, execute `pip uninstall fpdf` antes de instalar `fpdf2`. O programa funciona com ambos, mas só o `fpdf2` exporta PDF com caracteres fora de Latin-1 (`ż`, `€`, …).
 
@@ -29,11 +29,22 @@ A v1.0 guardava o estado em `.termifolha_estado.pkl`. Ao arrancar, a v1.1 migra-
 
 ## Desenvolvimento
 
+O projecto tem um ambiente próprio em `.venv/` (Python 3.15 e as dependências mais recentes; ignorado pelo git). Para o recriar ou actualizar:
+
 ```
-pip install -r requirements-dev.txt
-python -m pytest          # 90 testes
-python -m ruff check .    # lint
+conda create -p .venv python=3.15 -y        # ou: python -m venv .venv
+.venv\python.exe -m pip install -U -r requirements-dev.txt
+.venv\python.exe TermiFolha.py
 ```
+
+Testes e lint:
+
+```
+.venv\python.exe -m pytest          # 90 testes
+.venv\python.exe -m ruff check .    # lint
+```
+
+Para manter tudo actualizado: `pip install -U -r requirements-dev.txt` e correr os testes. O `pip list --outdated` deve ficar vazio.
 
 Os testes simulam o teclado (fixture `app` em `tests/conftest.py`). Avisos de depreciação (`DeprecationWarning`) falham os testes de propósito. Dois testes dependem da versão do `fpdf` e são saltados no ambiente a que não se aplicam.
 

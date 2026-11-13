@@ -1,8 +1,9 @@
-# Dependências de execução do TermiFolha.
-# Versões com que foi testado: Python 3.13, pandas 3.0, numpy 2.4, matplotlib 3.10, openpyxl 3.1, python-docx 1.2.
-pandas
-numpy
-matplotlib>=3.9  # o código usa boxplot(tick_labels=...)
-openpyxl
-python-docx
-fpdf2
+# Dependências de execução do TermiFolha: sempre as versões mais recentes.
+# Os mínimos abaixo são as versões com que foi testado (Python 3.13 e 3.15, Novembro de 2026).
+# O numpy 2.5 exige Python 3.12 ou superior.
+pandas>=3.1
+numpy>=2.5
+matplotlib>=3.11
+openpyxl>=3.1
+python-docx>=1.2
+fpdf2>=2.9

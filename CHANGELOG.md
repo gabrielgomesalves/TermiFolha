@@ -17,6 +17,8 @@
 - Importar passa a só alterar a folha activa depois de a importação terminar com sucesso.
 - O PDF usa a fonte DejaVu Sans com `fpdf2` e repõe os acentos nos títulos.
 - Versão 1.1.
+- Dependências sempre nas versões mais recentes (`pandas>=3.1`, `numpy>=2.5`, `matplotlib>=3.11`, `fpdf2>=2.9`, …). Em consequência, o Python mínimo passa a 3.12.
+- Licença: removido do cabeçalho o "todos os direitos reservados", que contradizia a MIT.
 
 ### Corrigido
 - **Alto:** preencher valores em falta com média ou mediana numa coluna inteira fazia o programa terminar com `TypeError` (agora arredonda).

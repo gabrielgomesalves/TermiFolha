@@ -9,7 +9,7 @@ pip install -r requirements.txt
 python TermiFolha.py
 ```
 
-Requer Python 3.11 ou superior (testado em 3.13). Não instale o pacote antigo `fpdf` ao lado do `fpdf2`: partilham o mesmo nome de módulo. O programa funciona com ambos, mas só o `fpdf2` exporta PDF com caracteres fora de Latin-1.
+Requer Python 3.12 ou superior (testado em 3.13 e 3.15), com as versões mais recentes das dependências. Não instale o pacote antigo `fpdf` ao lado do `fpdf2`: partilham o mesmo nome de módulo. O programa funciona com ambos, mas só o `fpdf2` exporta PDF com caracteres fora de Latin-1.
 
 Ao arrancar, o estado da sessão anterior é restaurado a partir de `.termifolha_estado.json`, que fica **na pasta do programa**. Erros de execução ficam em `.termifolha.log` (na mesma pasta).
 

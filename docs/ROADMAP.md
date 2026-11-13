@@ -14,6 +14,7 @@ Estado do backlog definido na auditoria. A aplicação mantém-se num **único f
 | PDF com fonte Unicode | DejaVu Sans (vem com o matplotlib) com `fpdf2`; Latin-1 com o `fpdf` antigo. |
 | Identificadores em inglês | Ver `RENOMEACOES.md`. |
 | Registo de erros | `.termifolha.log` rotativo, configurado só em `main()`. |
+| Testes em Python 3.13 e 3.15 | Passam com os pacotes mais recentes (pandas 3.1, numpy 2.5, matplotlib 3.11, fpdf2 2.9). |
 | Manual desactualizado | `docs/MANUAL.md`. O PDF não foi alterado: a fonte não está no repositório. |
 
 ## Em aberto
@@ -25,7 +26,6 @@ Estado do backlog definido na auditoria. A aplicação mantém-se num **único f
 | Fonte Unicode no `fpdf` antigo | Baixo | Médio | Evitado de propósito: o `fpdf` 1.7 escreve ficheiros de cache na pasta da fonte. Basta usar `fpdf2`. |
 | Separar `TermiFolha.py` em módulos | Médio | Alto | **Fora do âmbito por decisão do dono**: a aplicação fica num único ficheiro. Os testes já a protegeriam se esta decisão mudar. |
 | CI nunca executada | Médio | Baixo | `.github/workflows/ci.yml` não correu num repositório real. |
-| Testar noutras versões de Python | Médio | Baixo | Só foi testado em 3.13. |
 
 ## O que não vale a pena (ainda)
 
