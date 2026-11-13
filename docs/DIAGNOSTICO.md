@@ -58,12 +58,41 @@ Qualquer alteração futura é cega. `fpdf` e `fpdf2` expõem o mesmo módulo `f
 
 **B3. Monólito de 2100 linhas com estado global** [L]. Mistura `input`, `print`, cálculo e persistência, o que obriga a simular o teclado para testar.
 
-**B4. Exportação PDF depende da versão da biblioteca** [L]. Com `fpdf2` recente, `cell(..., ln=True)` está deprecado e caracteres fora de Latin-1 com as fontes core levantam excepção. Com a `fpdf` 1.7.2 testada, nada disto acontece. Não consegui verificar o comportamento com `fpdf2`.
+**B4. Exportação PDF falha com caracteres fora de Latin-1 e usa API deprecada** [R, reclassificado de [L] depois de testar com fpdf2 2.9.0 num venv limpo]. Um valor como `Zażółć` aborta toda a exportação (com `fpdf2` **e** com a `fpdf` 1.7.2; o erro é apanhado e mostrado como "Erro: …"). Com `fpdf2`, a fonte `arial` e `cell(ln=True)` emitem `DeprecationWarning`. Severidade real: MÉDIO.
+
+> **Correcção a este documento:** numa versão anterior escrevi que a exportação com Unicode "funciona na biblioteca instalada". Estava errado: a sonda só verificava se havia excepção e o `exportar_pdf` apanha-a e imprime "Erro". O teste de regressão `test_exportar_pdf_com_caracteres_fora_de_latin1_nao_falha` expôs o problema.
 
 **B5. Avisos do ruff** (`global` onde só se lê, `except` genéricos).
 
 ## Pontos verificados que NÃO são problemas
-`editar_celula` preserva o dtype `Int64`. Os gráficos lidam bem com valores em falta. A exportação com acentos e Unicode funciona na biblioteca instalada. A importação de datas e texto com valores nulos infere os tipos correctamente.
+`editar_celula` preserva o dtype `Int64`. Os gráficos lidam bem com valores em falta. A exportação PDF com acentos do português (`ã`, `ç`, `é`, que existem em Latin-1) funciona. A importação de datas e texto com valores nulos infere os tipos correctamente.
+
+## Descoberto durante as correcções (não estava na lista inicial)
+
+- **`filtro_texto` interpretava o termo como expressão regular** [R]: pesquisar `(` dava `PatternError`. Corrigido com `regex=False` (junto com M6).
+- **`inplace=True`** [R com pandas 3.1]: `Pandas4Warning`, será removido. 5 ocorrências, corrigidas.
+- **Importação (Excel) deixava o estado global meio alterado** se a inferência de tipos falhasse a meio [L]. Corrigido em `adoptar_dataframe`.
+- **Inteiros com células vazias importados do Excel ficam "decimal"** [R]: o pandas converte-os para `float64` e não há forma fiável de os distinguir de decimais inteiros (`2000.0`). **Não corrigido** para Excel; o CSV usa inferência própria. Ver ROADMAP.
+
+## Estado após as correcções
+
+| Item | Estado | Commit / nota |
+|---|---|---|
+| A1 fillna média em inteiro | corrigido | `fix(A1)` |
+| A2 datas como `object` | corrigido | `fix(A2)` |
+| A3 cabeçalhos numéricos | corrigido | `fix(A3)` |
+| M1 erros engolidos | corrigido | `fix(M1,M3)` |
+| M2 `pickle` | **pendente, precisa de decisão** | ROADMAP #1 |
+| M3 ficheiro de estado relativo | corrigido | `fix(M1,M3)` |
+| M4 coluna em branco | corrigido | `fix(M4)` |
+| M5 limpar folha vs manual | **decisão por omissão**: mantém-se reversível com Desfazer; o manual é que está desactualizado | ver README |
+| M6 filtro de texto | corrigido | `fix(M6)` |
+| M7 testes, dependências, `.gitignore`, README | corrigido | 53 testes, `requirements*.txt`, `pyproject.toml` |
+| B1 manual ↔ código | parcial: corrigidos remover linha e amostra; as restantes divergências ficam documentadas | README, secção "Diferenças face ao manual" |
+| B2 importar sem confirmar | pendente | ROADMAP |
+| B3 monólito | pendente | ROADMAP #2 |
+| B4 PDF | corrigido | `fix(B4)` |
+| B5 avisos do ruff | corrigido | lint limpo com a configuração do projecto |
 
 ## Ordem de ataque
 A1 → A2 → A3 → M1/M3 → M4 → M5/M6 → M7 (testes, dependências, `.gitignore`, README) → B3 (refactor com testes já a proteger).
