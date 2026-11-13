@@ -26,9 +26,9 @@ def test_ficheiros_de_estado_ficam_ao_lado_do_programa(tmp_path):
 def test_estado_e_json_e_nao_pickle(app):
     app.dummy()
 
-    data_rows = json.loads(Path(app.m.STATE_FILE).read_text(encoding="utf-8"))
-
-    assert data_rows["versao"] == 1
+    estado = json.loads(Path(app.m.STATE_FILE).read_text(encoding="utf-8"))
+    assert estado["versao"] == 2 and estado["activa"] == "Folha1"
+    data_rows = estado["folhas"][0]
     assert data_rows["colunas"] == ["Nome", "Idade", "Salario", "Cidade", "Admissao"]
     assert data_rows["tipos"] == {"Nome": "str", "Idade": "int", "Salario": "float", "Cidade": "str", "Admissao": "date"}
     assert data_rows["dados"][3][1] is None  # valor em falta

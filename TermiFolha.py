@@ -42,6 +42,7 @@
 #
 # 20-05-2026
 
+import copy
 import csv
 import json
 import logging
@@ -59,7 +60,7 @@ from fpdf import FPDF
 # Constantes da aplicação (nome, versão, ficheiros, dimensões UI)
 APP_NAME          = "TermiFolha"
 APP_TITLE        = "TermiFolha  —  Folha de Cálculo CLI"
-APP_VERSION        = "1.1"
+APP_VERSION        = "1.2"
 APP_AUTHOR         = "Gabriel Gomes Alves"
 _PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")
@@ -80,19 +81,36 @@ TYPE_CHOICES             = {
     "4": (DATE_TYPE, "Data (DD/MM/AAAA)"),
 }
 TYPE_NAME         = {col_type: name.lower() for col_type, name in TYPE_CHOICES.values()}
-HISTORY_LIMIT       = 4
+HISTORY_LIMIT       = 20  # valor por omissão (configurável em Definições)
+HISTORY_LIMIT_MAX   = 100
+PAGE_SIZE           = 20  # linhas por página em "Ver por páginas"
+DISPLAY_ROW_LIMIT   = 30  # linhas mostradas no ecrã principal (as restantes vêem-se por páginas)
+DEFAULT_SHEET_NAME  = "Folha1"
+EXT_PROJECT         = ".termifolha"
 UI_INDENT_1   = "  "
 UI_INDENT_2   = "    "
 
 log = logging.getLogger("termifolha")  # sem handlers por omissão; main() configura o ficheiro de registo
 log.addHandler(logging.NullHandler())
 
-# Estado global: tabela de dados, tipos por coluna e histórico undo/redo
+# Estado global: livro de folhas (a folha activa vive em `table`/`col_types`/`meta`) e histórico undo/redo
 table = pd.DataFrame()
 col_types = {}
+meta = {}  # metadados da folha activa (preenchido abaixo por new_meta)
+sheets = {DEFAULT_SHEET_NAME: None}  # nome -> folha inactiva; a activa é None (vive nas variáveis acima). A ordem é a dos separadores.
+active_name = DEFAULT_SHEET_NAME
+settings = {"history_limit": HISTORY_LIMIT, "page_size": PAGE_SIZE}
 
 undo_stack = []
 redo_stack = []
+
+
+def new_meta():
+    """Metadados de uma folha: regras de validação, formatos de apresentação, colunas visíveis, fórmulas e linha de totais."""
+    return {"rules": {}, "formats": {}, "visible": [], "formulas": {}, "totals": None}
+
+
+meta = new_meta()
 
 
 # Utilitários de terminal e formatação de valores
@@ -378,25 +396,34 @@ def infer_type(series):
 
 
 # Aplicação de tipos, persistência em ficheiro e histórico undo/redo
-def apply_types():
-    global table
-    for col in table.columns:
-        col_type = type_of(col)
+def typed_frame(data, types):
+    """Devolve uma cópia de `data` com cada coluna convertida para o tipo declarado (as que não convertem ficam como estão)."""
+    data = data.copy()
+    for col in data.columns:
+        col_type = types.get(col, str)
         try:
             if col_type is int:
-                table[col] = pd.to_numeric(table[col], errors="coerce").astype("Int64")
+                data[col] = pd.to_numeric(data[col], errors="coerce").astype("Int64")
             elif col_type is float:
-                table[col] = pd.to_numeric(table[col], errors="coerce")
+                data[col] = pd.to_numeric(data[col], errors="coerce")
             elif col_type == DATE_TYPE:
-                table[col] = pd.to_datetime(table[col], errors="coerce")
+                data[col] = pd.to_datetime(data[col], errors="coerce")
         except Exception:
-            pass
+            log.debug("Coluna %r não convertida para %r", col, col_type, exc_info=True)
+    return data
+
+
+def apply_types():
+    global table
+    table = typed_frame(table, col_types)
 
 
 # Persistência: o estado é gravado em JSON (nunca em pickle, que executa código ao carregar).
 _JSON_TYPE_NAME = {str: "str", int: "int", float: "float", DATE_TYPE: "date"}
 _TYPE_FROM_JSON_NAME = {name: col_type for col_type, name in _JSON_TYPE_NAME.items()}
-_STATE_VERSION = 1
+_STATE_VERSION = 2
+_SUPPORTED_STATE_VERSIONS = (1, 2)  # a versão 1 (uma só folha, sem metadados) é lida e convertida
+_TOTALS_FUNCTIONS = ("sum", "mean", "count", "min", "max")
 
 
 def _json_value(v):
@@ -409,21 +436,49 @@ def _json_value(v):
     return v
 
 
-def _state_to_dict():
-    column_names = [str(c) for c in table.columns]
-    lines = [[_json_value(v) for v in record] for record in table.itertuples(index=False, name=None)]
+def sheet_names():
+    """Nomes das folhas pela ordem dos separadores (a activa está sempre incluída)."""
+    names = list(sheets)
+    if active_name not in names:
+        names.append(active_name)
+    return names
+
+
+def get_sheet(name):
+    """Dados da folha `name` ({"table", "types", "meta"}); para a activa devolve as variáveis vivas."""
+    if name == active_name:
+        return {"table": table, "types": col_types, "meta": meta}
+    return sheets[name]
+
+
+def _sheet_to_dict(name, sheet):
+    data, types, sheet_meta = sheet["table"], sheet["types"], sheet["meta"]
     return {
-        "versao": _STATE_VERSION,
-        "colunas": column_names,
-        "tipos": {str(c): _JSON_TYPE_NAME.get(t, "str") for c, t in col_types.items()},
-        "dados": lines,
+        "nome": name,
+        "colunas": [str(c) for c in data.columns],
+        "tipos": {str(c): _JSON_TYPE_NAME.get(t, "str") for c, t in types.items()},
+        "dados": [[_json_value(v) for v in record] for record in data.itertuples(index=False, name=None)],
+        "regras": sheet_meta["rules"],
+        "formatos": sheet_meta["formats"],
+        "visiveis": sheet_meta["visible"],
+        "formulas": sheet_meta["formulas"],
+        "totais": sheet_meta["totals"],
     }
 
 
-def _state_from_dict(d):
-    """Valida e reconstrói (tabela, tipos). Levanta ValueError se o conteúdo não for um estado válido."""
-    if not isinstance(d, dict) or d.get("versao") != _STATE_VERSION:
-        raise ValueError("versão de estado desconhecida")
+def _state_to_dict():
+    return {
+        "versao": _STATE_VERSION,
+        "activa": active_name,
+        "definicoes": dict(settings),
+        "folhas": [_sheet_to_dict(name, get_sheet(name)) for name in sheet_names()],
+    }
+
+
+def _sheet_from_dict(d, name):
+    """Valida e reconstrói (nome, tabela, tipos, metadados) de uma folha. Levanta ValueError se for inválida."""
+    if not isinstance(d, dict):
+        raise ValueError("folha inválida")
     column_names, type_names, data_rows = d.get("colunas"), d.get("tipos"), d.get("dados")
     if not (isinstance(column_names, list) and all(isinstance(c, str) for c in column_names)):
         raise ValueError("lista de colunas inválida")
@@ -433,25 +488,98 @@ def _state_from_dict(d):
         raise ValueError("linha com número de valores diferente do número de colunas")
     new_col_types = {c: _TYPE_FROM_JSON_NAME.get(type_names.get(c), str) for c in column_names}
     df = pd.DataFrame(data_rows, columns=column_names) if data_rows else pd.DataFrame(columns=column_names)
-    return df, new_col_types
+
+    sheet_meta = new_meta()
+    for key, json_key in (("rules", "regras"), ("formats", "formatos"), ("formulas", "formulas")):
+        value = d.get(json_key, {})
+        if not isinstance(value, dict):
+            raise ValueError(f"'{json_key}' inválido")
+        sheet_meta[key] = {c: v for c, v in value.items() if c in column_names}
+    if any(not isinstance(v, dict) for key in ("rules", "formats") for v in sheet_meta[key].values()):
+        raise ValueError("regras ou formatos inválidos")
+    if any(not isinstance(v, str) for v in sheet_meta["formulas"].values()):
+        raise ValueError("fórmulas inválidas")
+    visible = d.get("visiveis", [])
+    if not (isinstance(visible, list) and all(isinstance(c, str) for c in visible)):
+        raise ValueError("colunas visíveis inválidas")
+    sheet_meta["visible"] = [c for c in visible if c in column_names]
+    totals = d.get("totais")
+    sheet_meta["totals"] = totals if totals in _TOTALS_FUNCTIONS else None
+    return name, df, new_col_types, sheet_meta
+
+
+def _sanitize_settings(raw):
+    """Aceita só definições válidas; o resto fica com o valor por omissão."""
+    raw = raw if isinstance(raw, dict) else {}
+    clean = {"history_limit": HISTORY_LIMIT, "page_size": PAGE_SIZE}
+    limit, page = raw.get("history_limit"), raw.get("page_size")
+    if isinstance(limit, int) and not isinstance(limit, bool) and 1 <= limit <= HISTORY_LIMIT_MAX:
+        clean["history_limit"] = limit
+    if isinstance(page, int) and not isinstance(page, bool) and 5 <= page <= 200:
+        clean["page_size"] = page
+    return clean
+
+
+def _state_from_dict(d):
+    """Valida e reconstrói o livro: devolve (lista de (nome, tabela, tipos, metadados), nome da activa, definições)."""
+    if not isinstance(d, dict) or d.get("versao") not in _SUPPORTED_STATE_VERSIONS:
+        raise ValueError("versão de estado desconhecida")
+    if d["versao"] == 1:
+        return [_sheet_from_dict(d, DEFAULT_SHEET_NAME)], DEFAULT_SHEET_NAME, _sanitize_settings(None)
+    raw_sheets = d.get("folhas")
+    if not (isinstance(raw_sheets, list) and raw_sheets):
+        raise ValueError("lista de folhas inválida")
+    sheet_list = []
+    for raw in raw_sheets:
+        name = raw.get("nome") if isinstance(raw, dict) else None
+        if not isinstance(name, str) or sheet_name_error(name, [n for n, *_ in sheet_list]):
+            raise ValueError("nome de folha inválido ou repetido")
+        sheet_list.append(_sheet_from_dict(raw, name))
+    active = d.get("activa")
+    if active not in [n for n, *_ in sheet_list]:
+        active = sheet_list[0][0]
+    return sheet_list, active, _sanitize_settings(d.get("definicoes"))
+
+
+def _install_workbook(sheet_list, active, new_settings):
+    """Substitui todo o livro (folhas, activa, definições) pelo conteúdo já validado."""
+    global table, col_types, meta, sheets, active_name
+    new_sheets, live = {}, None
+    for name, df, types, sheet_meta in sheet_list:
+        sheet = {"table": typed_frame(df, types), "types": types, "meta": sheet_meta}
+        if name == active:
+            live, new_sheets[name] = sheet, None
+        else:
+            new_sheets[name] = sheet
+    table, col_types, meta = live["table"], live["types"], live["meta"]
+    sheets, active_name = new_sheets, active
+    settings.update(new_settings)
+
+
+def _write_state_file(path):
+    """Grava o livro em JSON de forma atómica (ficheiro temporário + os.replace). Levanta OSError/TypeError se falhar."""
+    temp_path = path + ".tmp"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as f:
+            json.dump(_state_to_dict(), f, ensure_ascii=False)
+        os.replace(temp_path, path)
+    except BaseException:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def save_state():
     """Grava o estado de forma atómica. Devolve True se gravou, False se falhou (e avisa o utilizador)."""
-    temp_path = STATE_FILE + ".tmp"
     try:
-        with open(temp_path, "w", encoding="utf-8") as f:
-            json.dump(_state_to_dict(), f, ensure_ascii=False)
-        os.replace(temp_path, STATE_FILE)
+        _write_state_file(STATE_FILE)
         return True
     except Exception as e:
         log.exception("Falha ao guardar o estado")
         print(f"{UI_INDENT_1}Aviso: não foi possível guardar o estado ({e}).")
         print(f"{UI_INDENT_1}As alterações mantêm-se em memória; exporte para Excel para não as perder.")
-        try:
-            os.remove(temp_path)
-        except OSError:
-            pass
         return False
 
 
@@ -492,38 +620,42 @@ def _preserve_invalid_file(path, error):
         print(f"{UI_INDENT_1}Não foi possível preservar o ficheiro ({backup_error}).")
 
 
+def _read_state_file(path):
+    """Lê e valida um ficheiro de estado/projecto em JSON. Levanta se for ilegível ou inválido."""
+    with open(path, encoding="utf-8") as f:
+        return _state_from_dict(json.load(f))
+
+
+def _read_legacy_pickle(path):
+    """Lê o estado da v1.0 (pickle) com um Unpickler restrito e devolve-o no formato do livro."""
+    with open(path, "rb") as f:
+        old_table, old_col_types = _SafeUnpickler(f).load()
+    if not isinstance(old_table, pd.DataFrame) or not isinstance(old_col_types, dict):
+        raise ValueError("conteúdo inesperado")
+    old_table = old_table.copy()
+    old_table.columns = [str(c) for c in old_table.columns]
+    types = {str(c): t for c, t in old_col_types.items()}
+    return [(DEFAULT_SHEET_NAME, old_table, types, new_meta())], DEFAULT_SHEET_NAME, _sanitize_settings(None)
+
+
 def load_state():
-    global table, col_types
+    global table, col_types, meta
     if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, encoding="utf-8") as f:
-                loaded = _state_from_dict(json.load(f))
-        except Exception as e:
-            _preserve_invalid_file(STATE_FILE, e)
-            table, col_types = pd.DataFrame(), {}
-            pause()
-            return
-        migrated = False
+        path, reader, migrated = STATE_FILE, _read_state_file, False
     elif os.path.exists(LEGACY_STATE_FILE):
-        try:
-            with open(LEGACY_STATE_FILE, "rb") as f:
-                old_table, old_col_types = _SafeUnpickler(f).load()
-            if not isinstance(old_table, pd.DataFrame) or not isinstance(old_col_types, dict):
-                raise ValueError("conteúdo inesperado")
-            old_table = old_table.copy()
-            old_table.columns = [str(c) for c in old_table.columns]
-            loaded = (old_table, {str(c): t for c, t in old_col_types.items()})
-        except Exception as e:
-            _preserve_invalid_file(LEGACY_STATE_FILE, e)
-            table, col_types = pd.DataFrame(), {}
-            pause()
-            return
-        migrated = True
+        path, reader, migrated = LEGACY_STATE_FILE, _read_legacy_pickle, True
     else:
         return
 
-    table, col_types = loaded
-    apply_types()
+    try:
+        loaded = reader(path)
+    except Exception as e:
+        _preserve_invalid_file(path, e)
+        reset_workbook()
+        pause()
+        return
+
+    _install_workbook(*loaded)
     if migrated and save_state():
         try:
             os.replace(LEGACY_STATE_FILE, LEGACY_STATE_FILE + ".migrado")
@@ -533,38 +665,161 @@ def load_state():
             log.warning("Não foi possível renomear o estado antigo: %s", e)
     undo_stack.clear()
     redo_stack.clear()
-    undo_stack.append((table.copy(), col_types.copy()))
+    undo_stack.append(snapshot())
+
+
+def reset_workbook():
+    """Volta a um livro com uma única folha vazia (as definições mantêm-se)."""
+    global table, col_types, meta, sheets, active_name
+    table, col_types, meta = pd.DataFrame(), {}, new_meta()
+    sheets, active_name = {DEFAULT_SHEET_NAME: None}, DEFAULT_SHEET_NAME
+
+
+# Folhas (separadores): nomes, criação, troca, renomear, eliminar, duplicar
+_SHEET_NAME_FORBIDDEN = set("[]:*?/\\")
+_SHEET_NAME_MAX = 31  # limite do Excel, para que a exportação nunca falhe por causa do nome
+
+
+def sheet_name_error(name, existing=None):
+    """Mensagem de erro se `name` não servir como nome de folha; None se for válido."""
+    existing = sheet_names() if existing is None else existing
+    if not name.strip():
+        return "o nome não pode ser vazio"
+    if name != name.strip():
+        return "o nome não pode começar nem acabar com espaços"
+    if len(name) > _SHEET_NAME_MAX:
+        return f"o nome tem mais de {_SHEET_NAME_MAX} caracteres"
+    if any(c in _SHEET_NAME_FORBIDDEN for c in name):
+        return "o nome não pode conter [ ] : * ? / \\"
+    if any(n.lower() == name.lower() for n in existing):
+        return "já existe uma folha com esse nome"
+    return None
+
+
+def unique_sheet_name(base):
+    """Devolve `base` ou `base (2)`, `base (3)`... conforme os nomes já usados (cortado para caber no limite)."""
+    base = "".join("_" if c in _SHEET_NAME_FORBIDDEN else c for c in base).strip()[:_SHEET_NAME_MAX - 5] or "Folha"
+    candidate, n = base, 2
+    while sheet_name_error(candidate):
+        candidate = f"{base} ({n})"
+        n += 1
+    return candidate
+
+
+def switch_sheet(name):
+    """Torna `name` a folha activa. As variáveis `table`/`col_types`/`meta` passam a apontar para ela."""
+    global table, col_types, meta, active_name
+    if name == active_name:
+        return
+    target = sheets[name]
+    sheets[active_name] = {"table": table, "types": col_types, "meta": meta}
+    table, col_types, meta = target["table"], target["types"], target["meta"]
+    sheets[name] = None
+    active_name = name
+
+
+def add_sheet(name, data=None, types=None, sheet_meta=None, activate=True):
+    """Acrescenta uma folha ao livro (vazia se não houver dados). Levanta ValueError se o nome for inválido."""
+    error = sheet_name_error(name)
+    if error:
+        raise ValueError(error)
+    sheets[name] = {
+        "table": pd.DataFrame() if data is None else data,
+        "types": {} if types is None else types,
+        "meta": new_meta() if sheet_meta is None else sheet_meta,
+    }
+    if activate:
+        switch_sheet(name)
+
+
+def rename_sheet(old, new):
+    """Renomeia uma folha mantendo a posição. Levanta ValueError se o novo nome for inválido."""
+    global sheets, active_name
+    others = [n for n in sheet_names() if n != old]
+    error = sheet_name_error(new, others)
+    if error:
+        raise ValueError(error)
+    sheets = {(new if n == old else n): v for n, v in sheets.items()}
+    if old == active_name:
+        active_name = new
+
+
+def delete_sheet(name):
+    """Elimina uma folha (nunca a última). Se for a activa, passa a activa a vizinha."""
+    global sheets
+    names = sheet_names()
+    if len(names) <= 1:
+        raise ValueError("o livro tem de ter pelo menos uma folha")
+    if name == active_name:
+        position = names.index(name)
+        switch_sheet(names[position + 1] if position + 1 < len(names) else names[position - 1])
+    del sheets[name]
+
+
+def duplicate_sheet(name, new_name):
+    """Copia a folha `name` para uma nova folha `new_name` (fica activa)."""
+    source = get_sheet(name)
+    copy_ = {"table": source["table"].copy(), "types": dict(source["types"]), "meta": copy.deepcopy(source["meta"])}
+    add_sheet(new_name, copy_["table"], copy_["types"], copy_["meta"])
+
+
+# Histórico (desfazer/refazer): cada ponto guarda o livro inteiro
+def snapshot():
+    """Cópia independente do livro (folha activa, outras folhas e qual é a activa)."""
+    def copy_sheet(sheet):
+        return {"table": sheet["table"].copy(), "types": dict(sheet["types"]), "meta": copy.deepcopy(sheet["meta"])}
+
+    return {
+        "live": copy_sheet({"table": table, "types": col_types, "meta": meta}),
+        "sheets": {n: (None if sh is None else copy_sheet(sh)) for n, sh in sheets.items()},
+        "active": active_name,
+    }
+
+
+def restore_snapshot(snap):
+    """Repõe o livro guardado em `snap` (trabalha sobre uma cópia, o ponto fica intacto para desfazer/refazer)."""
+    global table, col_types, meta, sheets, active_name
+    live = snap["live"]
+    table, col_types, meta = live["table"].copy(), dict(live["types"]), copy.deepcopy(live["meta"])
+    sheets = {
+        n: (None if sh is None else {"table": sh["table"].copy(), "types": dict(sh["types"]), "meta": copy.deepcopy(sh["meta"])})
+        for n, sh in snap["sheets"].items()
+    }
+    active_name = snap["active"]
 
 
 def record_checkpoint():
     redo_stack.clear()
-    undo_stack.append((table.copy(), col_types.copy()))
-    if len(undo_stack) > HISTORY_LIMIT:
-        undo_stack.pop(0)
+    undo_stack.append(snapshot())
+    del undo_stack[:max(0, len(undo_stack) - (settings["history_limit"] + 1))]
+
+
+def commit():
+    """Fecha uma alteração: grava o estado e regista o ponto de desfazer."""
+    save_state()
+    record_checkpoint()
 
 
 def undo_last():
-    global table, col_types
     if len(undo_stack) <= 1:
         print(f"{UI_INDENT_1}Nada para desfazer.")
         pause()
         return
     redo_stack.append(undo_stack.pop())
-    table, col_types = undo_stack[-1][0].copy(), undo_stack[-1][1].copy()
+    restore_snapshot(undo_stack[-1])
     save_state()
     print(f"{UI_INDENT_1}Desfeito. ({len(undo_stack) - 1} passo(s) atrás)")
     pause()
 
 
 def redo_last():
-    global table, col_types
     if not redo_stack:
         print(f"{UI_INDENT_1}Nada para refazer.")
         pause()
         return
     state = redo_stack.pop()
     undo_stack.append(state)
-    table, col_types = state[0].copy(), state[1].copy()
+    restore_snapshot(state)
     save_state()
     print(f"{UI_INDENT_1}Refeito. ({len(redo_stack)} passo(s) para refazer)")
     pause()
@@ -572,7 +827,7 @@ def redo_last():
 
 # Gestão da folha: criar, importar, exportar, dummy, limpar
 def new_sheet():
-    global table, col_types
+    global table, col_types, meta
     header("NOVA FOLHA")
     print(f"{UI_INDENT_1}Defina as colunas (nome vazio ou 'sair' para terminar | 'sair' sem colunas para cancelar)\n")
 
@@ -601,8 +856,8 @@ def new_sheet():
 
     table = pd.DataFrame(columns=column_names)
     col_types = new_col_types
-    save_state()
-    record_checkpoint()
+    meta = new_meta()
+    commit()
     print(f"\n{UI_INDENT_1}Folha criada com {len(column_names)} coluna(s).")
     pause()
 
@@ -652,7 +907,7 @@ def adopt_dataframe(df, detect_dates=False, ask_integers=False):
     O estado global só é alterado no fim, por isso uma falha a meio não deixa
     a folha actual meio substituída.
     """
-    global table, col_types
+    global table, col_types, meta
     df = df.copy()
     # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
     df.columns = [str(c) for c in df.columns]
@@ -668,10 +923,9 @@ def adopt_dataframe(df, detect_dates=False, ask_integers=False):
                 if dates is not None:
                     df[col] = dates
     new_col_types = {col: infer_type(df[col]) for col in df.columns}
-    table, col_types = df, new_col_types
+    table, col_types, meta = df, new_col_types, new_meta()
     apply_types()
-    save_state()
-    record_checkpoint()
+    commit()
 
 
 def _as_dates(series):
@@ -985,7 +1239,7 @@ def export_excel():
 
 
 def create_dummy_sheet():
-    global table, col_types
+    global table, col_types, meta
 
     header("CRIAR FOLHA DUMMY")
     print()
@@ -1006,9 +1260,9 @@ def create_dummy_sheet():
         ], format="%d/%m/%Y"),
     })
     col_types = {"Nome": str, "Idade": int, "Salario": float, "Cidade": str, "Admissao": DATE_TYPE}
+    meta = new_meta()
     apply_types()
-    save_state()
-    record_checkpoint()
+    commit()
 
     print(f"\n{UI_INDENT_1}Folha dummy criada: 8 linhas | 5 colunas")
     print(f"{UI_INDENT_1}Inclui:")
@@ -1020,7 +1274,7 @@ def create_dummy_sheet():
 
 
 def clear_sheet():
-    global table, col_types
+    global table, col_types, meta
     if table.columns.empty:
         print(f"{UI_INDENT_1}Folha já está vazia.")
         pause()
@@ -1033,14 +1287,16 @@ def clear_sheet():
         pause()
         return
 
-    table = pd.DataFrame()
-    col_types = {}
-    try:
-        if os.path.exists(STATE_FILE):
-            os.remove(STATE_FILE)
-    except Exception:
-        pass
-    record_checkpoint()
+    table, col_types, meta = pd.DataFrame(), {}, new_meta()
+    if len(sheet_names()) > 1:
+        commit()  # as outras folhas do livro têm de ser preservadas
+    else:
+        try:
+            if os.path.exists(STATE_FILE):
+                os.remove(STATE_FILE)
+        except OSError:
+            log.warning("Não foi possível remover o ficheiro de estado", exc_info=True)
+        record_checkpoint()
     print(f"\n{UI_INDENT_1}Folha limpa.")
     pause()
 
@@ -1084,8 +1340,7 @@ def add_row():
         new_df = pd.DataFrame([new_row])
         table = pd.concat([table, new_df], ignore_index=True)
         apply_types()
-        save_state()
-        record_checkpoint()
+        commit()
         rows_added += 1
         print(f"\n{UI_INDENT_1}Linha adicionada. (total introduzido: {rows_added})\n")
 
@@ -1151,8 +1406,7 @@ def edit_cell():
         except Exception:
             print(f"{UI_INDENT_1}Valor inválido.")
 
-    save_state()
-    record_checkpoint()
+    commit()
     print(f"\n{UI_INDENT_1}Célula atualizada.")
     pause()
 
@@ -1188,13 +1442,27 @@ def remove_row():
         return
 
     table = table.drop(index=idx).reset_index(drop=True)
-    save_state()
-    record_checkpoint()
+    commit()
     print(f"\n{UI_INDENT_1}Linha {idx} removida.")
     pause()
 
 
 # Operações sobre colunas: adicionar, remover, renomear
+def forget_column_meta(col):
+    """Remove os metadados (regras, formato, visibilidade, fórmula) de uma coluna eliminada."""
+    for key in ("rules", "formats", "formulas"):
+        meta[key].pop(col, None)
+    meta["visible"] = [c for c in meta["visible"] if c != col]
+
+
+def rename_column_meta(old, new):
+    """Passa os metadados de uma coluna para o novo nome."""
+    for key in ("rules", "formats", "formulas"):
+        if old in meta[key]:
+            meta[key][new] = meta[key].pop(old)
+    meta["visible"] = [new if c == old else c for c in meta["visible"]]
+
+
 def add_column():
     global table, col_types
     if table.columns.empty:
@@ -1220,8 +1488,7 @@ def add_column():
     if table.empty:
         table[name] = pd.Series(dtype=object)
         apply_types()
-        save_state()
-        record_checkpoint()
+        commit()
         print(f"\n{UI_INDENT_1}Coluna '{name}' adicionada.")
         pause()
         return
@@ -1246,8 +1513,7 @@ def add_column():
 
     table[name] = values
     apply_types()
-    save_state()
-    record_checkpoint()
+    commit()
     print(f"\n{UI_INDENT_1}Coluna '{name}' adicionada.")
     pause()
 
@@ -1276,8 +1542,8 @@ def remove_column():
 
     table = table.drop(columns=[name])
     col_types.pop(name, None)
-    save_state()
-    record_checkpoint()
+    forget_column_meta(name)
+    commit()
     print(f"\n{UI_INDENT_1}Coluna '{name}' removida.")
     pause()
 
@@ -1315,8 +1581,8 @@ def rename_column():
     table = table.rename(columns={name: new_name})
     if name in col_types:
         col_types[new_name] = col_types.pop(name)
-    save_state()
-    record_checkpoint()
+    rename_column_meta(name, new_name)
+    commit()
     print(f"\n{UI_INDENT_1}'{name}' renomeada para '{new_name}'.")
     pause()
 
@@ -1360,8 +1626,7 @@ def sort_rows():
         asc_order.append(direction != "D")
 
     table = table.sort_values(by=sort_cols, ascending=asc_order, ignore_index=True)
-    save_state()
-    record_checkpoint()
+    commit()
 
     description = ", ".join(f"{c} ({'asc' if a else 'desc'})" for c, a in zip(sort_cols, asc_order, strict=True))
     print(f"\n{UI_INDENT_1}Ordenado por: {description}")
@@ -1828,8 +2093,7 @@ def duplicates():
         n_before = len(table)
         table = table.drop_duplicates(ignore_index=True)
         apply_types()
-        save_state()
-        record_checkpoint()
+        commit()
         print(f"\n{UI_INDENT_1}{n_before - len(table)} duplicado(s) removido(s).")
     else:
         print(f"\n{UI_INDENT_1}Nenhuma alteração.")
@@ -1917,16 +2181,14 @@ def missing_data():
             return
 
         apply_types()
-        save_state()
-        record_checkpoint()
+        commit()
         print(f"\n{UI_INDENT_1}Coluna '{col}' preenchida.")
     elif op == "2":
         if not confirm(f"Remover linhas com qualquer missing ({int(counts.sum())} células)?"):
             return
         n_before = len(table)
         table = table.dropna().reset_index(drop=True)
-        save_state()
-        record_checkpoint()
+        commit()
         print(f"\n{UI_INDENT_1}{n_before - len(table)} linha(s) removida(s).")
     pause()
 
@@ -2464,7 +2726,7 @@ def main():
     load_state()
 
     if not undo_stack:
-        undo_stack.append((table.copy(), col_types.copy()))
+        undo_stack.append(snapshot())
 
     while True:
         header("MENU PRINCIPAL")
