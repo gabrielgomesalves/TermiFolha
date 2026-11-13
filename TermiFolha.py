@@ -354,6 +354,8 @@ def aplicar_tipos():
                 tabela[col] = pd.to_numeric(tabela[col], errors="coerce").astype("Int64")
             elif tipo == float:
                 tabela[col] = pd.to_numeric(tabela[col], errors="coerce")
+            elif tipo == TIPO_DATA:
+                tabela[col] = pd.to_datetime(tabela[col], errors="coerce")
         except Exception:
             pass
 
