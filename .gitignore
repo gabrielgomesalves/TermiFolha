@@ -1,6 +1,11 @@
 # Estado e exportações geradas em tempo de execução
+.termifolha_estado.json
+.termifolha_estado.json.tmp
 .termifolha_estado.pkl
+.termifolha_estado.pkl.migrado
 .termifolha_estado.pkl.corrompido
+.termifolha.log*
+.termifolha_estado.json.corrompido
 *.xlsx
 *.docx
 /*.pdf

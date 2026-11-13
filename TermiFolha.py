@@ -42,6 +42,8 @@
 # 20-05-2026
 
 import csv
+import json
+import logging
 import os
 import pickle
 
@@ -56,7 +58,10 @@ NOME_APP          = "TermiFolha"
 TITULO_APP        = "TermiFolha  —  Folha de Cálculo CLI"
 VERSAO_APP        = "1.0"
 AUTOR_APP         = "Gabriel Gomes Alves"
-FICHEIRO_ESTADO   = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".termifolha_estado.pkl")
+_PASTA_PROGRAMA   = os.path.dirname(os.path.abspath(__file__))
+FICHEIRO_ESTADO   = os.path.join(_PASTA_PROGRAMA, ".termifolha_estado.json")
+FICHEIRO_ESTADO_LEGADO = os.path.join(_PASTA_PROGRAMA, ".termifolha_estado.pkl")  # formato antigo, só lido para migrar
+FICHEIRO_LOG      = os.path.join(_PASTA_PROGRAMA, ".termifolha.log")
 EXT_EXCEL         = ".xlsx"
 EXT_CSV           = ".csv"
 EXT_WORD          = ".docx"
@@ -75,6 +80,9 @@ NOME_TIPO         = {tipo: nome.lower() for tipo, nome in TIPOS.values()}
 HIST_LIMITE       = 4
 UI_INDENTACAO_1   = "  "
 UI_INDENTACAO_2   = "    "
+
+log = logging.getLogger("termifolha")  # sem handlers por omissão; main() configura o ficheiro de registo
+log.addHandler(logging.NullHandler())
 
 # Estado global: tabela de dados, tipos por coluna e histórico undo/redo
 tabela = pd.DataFrame()
@@ -363,33 +371,144 @@ def aplicar_tipos():
             pass
 
 
+# Persistência: o estado é gravado em JSON (nunca em pickle, que executa código ao carregar).
+_NOME_TIPO_JSON = {str: "str", int: "int", float: "float", TIPO_DATA: "date"}
+_TIPO_DE_NOME_JSON = {nome: tipo for tipo, nome in _NOME_TIPO_JSON.items()}
+_VERSAO_ESTADO = 1
+
+
+def _valor_json(v):
+    if pd.isna(v):
+        return None
+    if hasattr(v, "isoformat"):
+        return v.isoformat()
+    if hasattr(v, "item"):
+        return v.item()
+    return v
+
+
+def _estado_para_dict():
+    colunas = [str(c) for c in tabela.columns]
+    linhas = [[_valor_json(v) for v in registo] for registo in tabela.itertuples(index=False, name=None)]
+    return {
+        "versao": _VERSAO_ESTADO,
+        "colunas": colunas,
+        "tipos": {str(c): _NOME_TIPO_JSON.get(t, "str") for c, t in tipos.items()},
+        "dados": linhas,
+    }
+
+
+def _estado_de_dict(d):
+    """Valida e reconstrói (tabela, tipos). Levanta ValueError se o conteúdo não for um estado válido."""
+    if not isinstance(d, dict) or d.get("versao") != _VERSAO_ESTADO:
+        raise ValueError("versão de estado desconhecida")
+    colunas, nomes_tipos, dados = d.get("colunas"), d.get("tipos"), d.get("dados")
+    if not (isinstance(colunas, list) and all(isinstance(c, str) for c in colunas)):
+        raise ValueError("lista de colunas inválida")
+    if not (isinstance(nomes_tipos, dict) and isinstance(dados, list)):
+        raise ValueError("estrutura inválida")
+    if any(not isinstance(r, list) or len(r) != len(colunas) for r in dados):
+        raise ValueError("linha com número de valores diferente do número de colunas")
+    novos_tipos = {c: _TIPO_DE_NOME_JSON.get(nomes_tipos.get(c), str) for c in colunas}
+    df = pd.DataFrame(dados, columns=colunas) if dados else pd.DataFrame(columns=colunas)
+    return df, novos_tipos
+
+
 def guardar_estado():
+    """Grava o estado de forma atómica. Devolve True se gravou, False se falhou (e avisa o utilizador)."""
+    temporario = FICHEIRO_ESTADO + ".tmp"
     try:
-        with open(FICHEIRO_ESTADO, "wb") as f:
-            pickle.dump((tabela, tipos), f)
+        with open(temporario, "w", encoding="utf-8") as f:
+            json.dump(_estado_para_dict(), f, ensure_ascii=False)
+        os.replace(temporario, FICHEIRO_ESTADO)
+        return True
     except Exception as e:
+        log.exception("Falha ao guardar o estado")
         print(f"{UI_INDENTACAO_1}Aviso: não foi possível guardar o estado ({e}).")
         print(f"{UI_INDENTACAO_1}As alterações mantêm-se em memória; exporte para Excel para não as perder.")
+        try:
+            os.remove(temporario)
+        except OSError:
+            pass
+        return False
+
+
+# Tipos que um estado antigo (pickle) pode legitimamente referenciar. Tudo o resto é recusado.
+_PICKLE_BUILTINS = {"str", "int", "float", "bool", "dict", "list", "tuple", "set", "frozenset", "slice", "object", "complex", "bytes", "range"}
+_PICKLE_NUMPY = {"_reconstruct", "ndarray", "dtype", "_frombuffer", "scalar"}
+_PICKLE_PANDAS_TOPO = {  # nunca "eval", "read_pickle", ...
+    "DataFrame", "Series", "Index", "RangeIndex", "MultiIndex", "DatetimeIndex",
+    "StringDtype", "Int64Dtype", "Float64Dtype", "BooleanDtype", "DatetimeTZDtype", "CategoricalDtype",
+}
+
+
+class _UnpicklerSeguro(pickle.Unpickler):
+    """Só deixa reconstruir DataFrames: recusa qualquer outro objecto (os.system, pandas.eval, ...)."""
+
+    def find_class(self, module, name):
+        if "." in name:
+            raise pickle.UnpicklingError(f"referência recusada: {module}.{name}")
+        if module == "builtins" and name in _PICKLE_BUILTINS:
+            return super().find_class(module, name)
+        if module.startswith("numpy") and name in _PICKLE_NUMPY:
+            return super().find_class(module, name)
+        if (module == "pandas" and name in _PICKLE_PANDAS_TOPO) or module == "pandas.arrays":
+            return super().find_class(module, name)
+        if (module.startswith("pandas.core.") or module.startswith("pandas._libs.")) and not module.startswith("pandas.core.computation"):
+            return super().find_class(module, name)
+        raise pickle.UnpicklingError(f"referência recusada: {module}.{name}")
+
+
+def _preservar_ficheiro_invalido(caminho, erro):
+    copia = caminho + ".corrompido"
+    log.error("Estado inválido em %s: %s", caminho, erro)
+    print(f"{UI_INDENTACAO_1}Aviso: o estado guardado está corrompido ({erro}).")
+    try:
+        os.replace(caminho, copia)
+        print(f"{UI_INDENTACAO_1}O ficheiro foi preservado como '{copia}'. A começar com uma folha vazia.")
+    except OSError as erro_copia:
+        print(f"{UI_INDENTACAO_1}Não foi possível preservar o ficheiro ({erro_copia}).")
 
 
 def carregar_estado():
     global tabela, tipos
-    if not os.path.exists(FICHEIRO_ESTADO):
-        return
-    try:
-        with open(FICHEIRO_ESTADO, "rb") as f:
-            tabela, tipos = pickle.load(f)
-    except Exception as e:
-        copia = FICHEIRO_ESTADO + ".corrompido"
-        print(f"{UI_INDENTACAO_1}Aviso: o estado guardado está corrompido ({e}).")
+    if os.path.exists(FICHEIRO_ESTADO):
         try:
-            os.replace(FICHEIRO_ESTADO, copia)
-            print(f"{UI_INDENTACAO_1}O ficheiro foi preservado como '{copia}'. A começar com uma folha vazia.")
-        except OSError as erro_copia:
-            print(f"{UI_INDENTACAO_1}Não foi possível preservar o ficheiro ({erro_copia}).")
-        tabela, tipos = pd.DataFrame(), {}
-        pausar()
+            with open(FICHEIRO_ESTADO, encoding="utf-8") as f:
+                novo = _estado_de_dict(json.load(f))
+        except Exception as e:
+            _preservar_ficheiro_invalido(FICHEIRO_ESTADO, e)
+            tabela, tipos = pd.DataFrame(), {}
+            pausar()
+            return
+        migrado = False
+    elif os.path.exists(FICHEIRO_ESTADO_LEGADO):
+        try:
+            with open(FICHEIRO_ESTADO_LEGADO, "rb") as f:
+                antigo_tabela, antigo_tipos = _UnpicklerSeguro(f).load()
+            if not isinstance(antigo_tabela, pd.DataFrame) or not isinstance(antigo_tipos, dict):
+                raise ValueError("conteúdo inesperado")
+            antigo_tabela = antigo_tabela.copy()
+            antigo_tabela.columns = [str(c) for c in antigo_tabela.columns]
+            novo = (antigo_tabela, {str(c): t for c, t in antigo_tipos.items()})
+        except Exception as e:
+            _preservar_ficheiro_invalido(FICHEIRO_ESTADO_LEGADO, e)
+            tabela, tipos = pd.DataFrame(), {}
+            pausar()
+            return
+        migrado = True
+    else:
         return
+
+    tabela, tipos = novo
+    aplicar_tipos()
+    if migrado and guardar_estado():
+        try:
+            os.replace(FICHEIRO_ESTADO_LEGADO, FICHEIRO_ESTADO_LEGADO + ".migrado")
+            print(f"{UI_INDENTACAO_1}Estado antigo migrado para o novo formato (cópia em '{FICHEIRO_ESTADO_LEGADO}.migrado').")
+            pausar()
+        except OSError as e:
+            log.warning("Não foi possível renomear o estado antigo: %s", e)
     undo.clear()
     redo.clear()
     undo.append((tabela.copy(), tipos.copy()))
