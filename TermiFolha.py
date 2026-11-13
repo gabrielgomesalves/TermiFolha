@@ -51,6 +51,7 @@ import operator
 import os
 import pickle
 import re
+import time
 
 import fpdf as fpdf_lib
 import matplotlib
@@ -2313,10 +2314,11 @@ def statistics_menu():
         print(f"{UI_INDENT_1}[6] Top N valores mais frequentes")
         print(f"{UI_INDENT_1}[7] Nº de valores únicos")
         print(f"{UI_INDENT_1}[8] Assimetria + Curtose")
+        print(f"{UI_INDENT_1}[9] Correlação (Pearson e Spearman)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1","2","3","4","5","6","7","8","0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
 
         if choice == "0":
             break
@@ -2336,6 +2338,8 @@ def statistics_menu():
             stat_unique()
         elif choice == "8":
             stat_skew_kurt()
+        elif choice == "9":
+            stat_correlation()
 
 
 # Análise avançada: info do DataFrame, groupby, duplicados, missing data
@@ -2519,6 +2523,48 @@ def missing_data():
 
 
 # Gráficos (matplotlib + numpy): dispersão, área, histograma, boxplot, heatmap, tendência
+plot_png_dir = None  # pasta onde gravar os gráficos em PNG; None = mostrá-los numa janela
+
+
+def finish_plot(name):
+    """Termina um gráfico: mostra-o numa janela ou, com a gravação em PNG activa, grava-o e fecha-o."""
+    if plot_png_dir is None:
+        plt.show()
+        return
+    base = os.path.join(plot_png_dir, f"{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+    path, n = base + ".png", 2
+    while os.path.exists(path):  # dois gráficos no mesmo segundo não se sobrepõem
+        path, n = f"{base}_{n}.png", n + 1
+    try:
+        plt.savefig(path, dpi=150, bbox_inches="tight")
+        print(f"{UI_INDENT_1}Gráfico guardado em '{path}'.")
+    except OSError as e:
+        log.exception("Falha ao gravar o gráfico")
+        print(f"{UI_INDENT_1}Erro ao gravar o gráfico: {e}")
+    finally:
+        plt.close("all")
+    pause()
+
+
+def toggle_png_export():
+    global plot_png_dir
+    if plot_png_dir is not None:
+        plot_png_dir = None
+        print(f"{UI_INDENT_1}Os gráficos voltam a abrir numa janela.")
+        pause()
+        return
+    folder = input(f"{UI_INDENT_1}Pasta onde gravar os PNG (Enter = graficos): ").strip() or "graficos"
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except OSError as e:
+        print(f"{UI_INDENT_1}Não foi possível usar a pasta ({e}).")
+        pause()
+        return
+    plot_png_dir = folder
+    print(f"{UI_INDENT_1}Os gráficos passam a ser gravados em '{folder}' (sem abrir janela).")
+    pause()
+
+
 def plot_scatter():
     cols = ask_numeric_columns(
         min_n=2,
@@ -2543,7 +2589,7 @@ def plot_scatter():
     plt.title(f"Dispersão: {col_x} vs {col_y}")
     plt.grid(linestyle="--", alpha=0.5)
     plt.tight_layout()
-    plt.show()
+    finish_plot("scatter")
 
 
 def plot_area():
@@ -2563,7 +2609,7 @@ def plot_area():
     plt.grid(linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    finish_plot("area")
 
 
 # Gráficos analíticos: histograma, boxplot, heatmap, média móvel, tendência
@@ -2598,7 +2644,7 @@ def plot_histogram():
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    finish_plot("histogram")
 
 
 def plot_boxplot():
@@ -2619,7 +2665,7 @@ def plot_boxplot():
     plt.title("Boxplot — quartis e mediana por coluna")
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
-    plt.show()
+    finish_plot("boxplot")
 
 
 def plot_correlation_heatmap():
@@ -2648,7 +2694,7 @@ def plot_correlation_heatmap():
             plt.text(j, i, f"{matrix[i, j]:.2f}", ha="center", va="center", color="black")
     plt.title("Heatmap de correlação")
     plt.tight_layout()
-    plt.show()
+    finish_plot("correlation_heatmap")
 
 
 def plot_moving_average():
@@ -2683,7 +2729,7 @@ def plot_moving_average():
     plt.grid(linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    finish_plot("moving_average")
 
 
 def plot_polynomial_trend():
@@ -2720,7 +2766,7 @@ def plot_polynomial_trend():
     plt.grid(linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    finish_plot("polynomial_trend")
 
 
 # Gráficos com eixos personalizados (escolha de eixo X e agregações)
@@ -2769,7 +2815,7 @@ def plot_bars():
     plt.xticks(rotation=45, ha="right")
     plt.grid(axis="y", linestyle="--", alpha=0.5)
     plt.tight_layout()
-    plt.show()
+    finish_plot("bars")
 
 
 def plot_lines():
@@ -2806,7 +2852,7 @@ def plot_lines():
     plt.grid(linestyle="--", alpha=0.5)
     plt.legend()
     plt.tight_layout()
-    plt.show()
+    finish_plot("lines")
 
 
 def plot_pie():
@@ -2838,7 +2884,7 @@ def plot_pie():
     plt.pie(result.values, labels=[str(label_text) for label_text in result.index], autopct="%1.1f%%", startangle=90)
     plt.title(f"Circular: {value_col} por {col_labels} ({agg})")
     plt.tight_layout()
-    plt.show()
+    finish_plot("pie")
 
 
 # Menu de gráficos: orquestra todas as visualizações disponíveis
@@ -2855,10 +2901,11 @@ def menu_charts():
         print(f"{UI_INDENT_1}[8] Heatmap de correlação")
         print(f"{UI_INDENT_1}[9] Linhas com média móvel")
         print(f"{UI_INDENT_1}[A] Tendência polinomial")
+        print(f"{UI_INDENT_1}[B] Gravar gráficos em PNG: {'ligado (' + plot_png_dir + ')' if plot_png_dir else 'desligado'}")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -2881,6 +2928,8 @@ def menu_charts():
             plot_moving_average()
         elif choice == "A":
             plot_polynomial_trend()
+        elif choice == "B":
+            toggle_png_export()
 
 
 # Regras de validação por coluna: mínimo/máximo (números e datas), valores permitidos e obrigatório
@@ -3250,6 +3299,278 @@ def find_replace():
     apply_types()
     commit()
     print(f"\n{UI_INDENT_1}Substituição concluída.")
+    pause()
+
+
+# Análise: correlação, outliers, normalização e faixas
+CORRELATION_MIN_PAIRS = 3
+IQR_FACTOR = 1.5
+ZSCORE_LIMIT = 3.0
+
+
+def correlation_strength(r):
+    """Descrição em português da intensidade e do sentido de um coeficiente de correlação."""
+    if pd.isna(r):
+        return "indefinida"
+    size = abs(r)
+    for limit, label in ((0.8, "muito forte"), (0.6, "forte"), (0.4, "moderada"), (0.2, "fraca")):
+        if size >= limit:
+            return f"{label} {'positiva' if r > 0 else 'negativa'}"
+    return "muito fraca ou nula"
+
+
+def correlation(col_x, col_y, method="pearson"):
+    """Coeficiente de correlação ("pearson" ou "spearman") entre duas colunas numéricas, só com as linhas onde ambas têm valor.
+
+    Devolve (r, nº de pares). Levanta ValueError se houver menos de 3 pares ou se uma das colunas for constante.
+    """
+    pairs = table[[col_x, col_y]].dropna().astype("float64")
+    if len(pairs) < CORRELATION_MIN_PAIRS:
+        raise ValueError(f"são precisos pelo menos {CORRELATION_MIN_PAIRS} pares de valores (há {len(pairs)})")
+    if pairs[col_x].nunique() < 2 or pairs[col_y].nunique() < 2:
+        raise ValueError("uma das colunas não varia, por isso a correlação não está definida")
+    if method == "spearman":
+        pairs = pairs.rank()  # Spearman = Pearson sobre as ordens (evita depender do scipy)
+    elif method != "pearson":
+        raise ValueError(f"método desconhecido: {method}")
+    return float(pairs[col_x].corr(pairs[col_y])), len(pairs)
+
+
+def stat_correlation():
+    cols = ask_numeric_columns(min_n=2, message="Colunas (2 para o detalhe, mais para a matriz), separadas por vírgula")
+    if cols is None:
+        return
+    print()
+    if len(cols) == 2:
+        try:
+            for method, label in (("pearson", "Pearson (relação linear)"), ("spearman", "Spearman (relação monótona, por ordens)")):
+                r, n = correlation(cols[0], cols[1], method)
+                print(f"{UI_INDENT_1}{label}: {r:.4f}  ->  {correlation_strength(r)}  ({n} pares)")
+        except ValueError as e:
+            print(f"{UI_INDENT_1}{e}.")
+    else:
+        print(f"{UI_INDENT_1}Matriz de correlação de Pearson:\n")
+        print_pandas_table(table[cols].astype("float64").corr().round(3))
+    pause()
+
+
+def detect_outliers(col, method="iqr", factor=None):
+    """Máscara (por linha da folha) dos valores anómalos de uma coluna numérica e os limites usados.
+
+    "iqr": fora de [Q1 - k*IQR, Q3 + k*IQR] (k=1.5); "zscore": a mais de k desvios-padrão da média (k=3).
+    Devolve (máscara, limite inferior, limite superior); valores em falta nunca são anómalos.
+    """
+    series = pd.to_numeric(table[col], errors="coerce").astype("float64")
+    if method == "iqr":
+        factor = IQR_FACTOR if factor is None else factor
+        q1, q3 = series.quantile(0.25), series.quantile(0.75)
+        low, high = q1 - factor * (q3 - q1), q3 + factor * (q3 - q1)
+    elif method == "zscore":
+        factor = ZSCORE_LIMIT if factor is None else factor
+        mean, std = series.mean(), series.std()
+        low, high = mean - factor * std, mean + factor * std
+    else:
+        raise ValueError(f"método desconhecido: {method}")
+    if pd.isna(low) or pd.isna(high):
+        return pd.Series(False, index=table.index), low, high
+    return (series < low) | (series > high), low, high
+
+
+def ask_float(message, default, minimum):
+    """Pede um número decimal >= `minimum`; Enter = `default`. Devolve None se for inválido."""
+    value = input(message).strip().replace(",", ".")
+    if not value:
+        return default
+    try:
+        number = float(value)
+    except ValueError:
+        number = float("nan")
+    if not number >= minimum:  # também apanha NaN
+        print(f"{UI_INDENT_1}Valor inválido (número >= {minimum:g} esperado).")
+        pause()
+        return None
+    return number
+
+
+def outliers():
+    global table
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    header("VALORES ANÓMALOS (OUTLIERS)")
+    print()
+    col = ask_numeric_column("Coluna a analisar")
+    if col is None:
+        return
+    print(f"{UI_INDENT_1}Método: [1] IQR (Q1 - k*IQR .. Q3 + k*IQR, k=1.5)  [2] Desvio-padrão (k=3)")
+    method = {"1": "iqr", "2": "zscore"}.get(input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() or "1")
+    if method is None:
+        print(f"{UI_INDENT_1}Opção inválida.")
+        pause()
+        return
+    default_factor = IQR_FACTOR if method == "iqr" else ZSCORE_LIMIT
+    factor = ask_float(f"{UI_INDENT_1}Factor k (Enter = {default_factor:g}): ", default_factor, 0.1)
+    if factor is None:
+        return
+    mask, low, high = detect_outliers(col, method, factor)
+    print(f"\n{UI_INDENT_1}Intervalo normal: {format_number(float(low))} a {format_number(float(high))}")
+    if not mask.any():
+        print(f"{UI_INDENT_1}Nenhum valor anómalo em '{col}'.")
+        pause()
+        return
+    print(f"{UI_INDENT_1}{int(mask.sum())} valor(es) anómalo(s):\n")
+    draw_data_table(table[mask])
+    print(f"\n{UI_INDENT_1}[1] Remover as linhas  [2] Deixar a célula em branco  [Enter] Só ver")
+    action = input(f"{UI_INDENT_1}Opção: ").strip()
+    if action == "1":
+        table = table[~mask].reset_index(drop=True)
+    elif action == "2":
+        if col in meta["formulas"]:
+            print(f"{UI_INDENT_1}'{col}' é uma coluna calculada; remova as linhas ou altere os dados de origem.")
+            pause()
+            return
+        table.loc[mask, col] = pd.NA
+    else:
+        return
+    apply_types()
+    commit()
+    print(f"\n{UI_INDENT_1}Feito.")
+    pause()
+
+
+def normalize_series(series, method):
+    """Normaliza uma série numérica: "minmax" -> [0, 1]; "zscore" -> média 0 e desvio-padrão 1. Levanta ValueError se não variar."""
+    values = pd.to_numeric(series, errors="coerce").astype("float64")
+    if method == "minmax":
+        span = values.max() - values.min()
+        if pd.isna(span) or span == 0:
+            raise ValueError("a coluna não varia (todos os valores são iguais ou está vazia)")
+        return (values - values.min()) / span
+    if method == "zscore":
+        std = values.std()
+        if pd.isna(std) or std == 0:
+            raise ValueError("a coluna não varia (todos os valores são iguais ou está vazia)")
+        return (values - values.mean()) / std
+    raise ValueError(f"método desconhecido: {method}")
+
+
+def _ask_new_column_name(default):
+    """Pede o nome de uma coluna nova (Enter = `default`, que é tornado único). None se cancelar."""
+    candidate, n = default, 2
+    while resolve_column(candidate) is not None:
+        candidate, n = f"{default}_{n}", n + 1
+    name = input(f"{UI_INDENT_1}Nome da nova coluna (Enter = {candidate}): ").strip()
+    if name.lower() == "sair":
+        return None
+    name = name or candidate
+    if resolve_column(name) is not None:
+        print(f"{UI_INDENT_1}Coluna '{name}' já existe.")
+        pause()
+        return None
+    return name
+
+
+def normalize_column():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    header("NORMALIZAR COLUNA")
+    print()
+    col = ask_numeric_column("Coluna a normalizar")
+    if col is None:
+        return
+    print(f"{UI_INDENT_1}[1] Min-máx (0 a 1)  [2] Padronização z-score (média 0, desvio 1)")
+    method = {"1": "minmax", "2": "zscore"}.get(input(f"{UI_INDENT_1}Opção (Enter = 1): ").strip() or "1")
+    if method is None:
+        print(f"{UI_INDENT_1}Opção inválida.")
+        pause()
+        return
+    try:
+        result = normalize_series(table[col], method)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
+    name = _ask_new_column_name(f"{col}_{'norm' if method == 'minmax' else 'z'}")
+    if name is None:
+        return
+    table[name] = result
+    col_types[name] = float
+    commit()
+    print(f"\n{UI_INDENT_1}Coluna '{name}' criada (a original não muda).")
+    pause()
+
+
+BIN_MAX = 50
+
+
+def make_bins(series, mode, spec):
+    """Divide uma coluna numérica em faixas. Devolve (rótulos por linha ou em branco fora das faixas, limites).
+
+    Faixas (a, b]; a primeira inclui o mínimo. `mode`: "edges" (spec = lista de limites crescentes), "equal" (spec = nº de faixas
+    de igual largura) ou "quantile" (spec = nº de faixas com igual nº de linhas). Levanta ValueError se os parâmetros forem inválidos.
+    """
+    values = pd.to_numeric(series, errors="coerce").astype("float64")
+    if mode == "edges":
+        try:
+            edges = [float(e) for e in spec]
+        except (TypeError, ValueError):
+            raise ValueError("os limites têm de ser números (com ponto decimal)") from None
+        if len(edges) < 2 or any(b <= a for a, b in zip(edges, edges[1:], strict=False)):
+            raise ValueError("indique pelo menos 2 limites, por ordem crescente e sem repetições")
+    elif mode in ("equal", "quantile"):
+        if not isinstance(spec, int) or not 2 <= spec <= BIN_MAX:
+            raise ValueError(f"o número de faixas tem de estar entre 2 e {BIN_MAX}")
+        if values.notna().sum() < 2:
+            raise ValueError("a coluna não tem valores suficientes")
+        edges = list(np.linspace(values.min(), values.max(), spec + 1)) if mode == "equal" else list(np.unique(values.quantile(np.linspace(0, 1, spec + 1))))
+        if len(edges) < 2 or edges[0] == edges[-1]:
+            raise ValueError("a coluna não varia, não há faixas possíveis")
+    else:
+        raise ValueError(f"modo desconhecido: {mode}")
+    labels = [f"{format_number(a)} a {format_number(b)}" for a, b in zip(edges, edges[1:], strict=False)]
+    return pd.cut(values, bins=edges, labels=labels, include_lowest=True).astype(object), edges
+
+
+def bin_column():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    header("FAIXAS (INTERVALOS)")
+    print()
+    col = ask_numeric_column("Coluna a dividir em faixas")
+    if col is None:
+        return
+    print(f"{UI_INDENT_1}[1] Limites à escolha (ex.: 0,18,30,65)  [2] N faixas de igual largura  [3] N faixas com igual nº de linhas")
+    option = input(f"{UI_INDENT_1}Opção: ").strip()
+    try:
+        if option == "1":
+            raw = input(f"{UI_INDENT_1}Limites separados por vírgula: ").replace(";", ",")
+            result, edges = make_bins(table[col], "edges", [x.strip().replace(" ", "") for x in raw.split(",") if x.strip()])
+        elif option in ("2", "3"):
+            count = ask_int_in_range(f"{UI_INDENT_1}Número de faixas (2-{BIN_MAX}): ", 2, BIN_MAX)
+            if count is None:
+                return
+            result, edges = make_bins(table[col], "equal" if option == "2" else "quantile", count)
+        else:
+            return
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
+    outside = int(table[col].notna().sum() - result.notna().sum())
+    name = _ask_new_column_name(f"{col}_faixa")
+    if name is None:
+        return
+    table[name] = result
+    col_types[name] = str
+    commit()
+    print(f"\n{UI_INDENT_1}Coluna '{name}' criada com {len(edges) - 1} faixa(s) (a, b]; a primeira inclui o mínimo.")
+    if outside:
+        print(f"{UI_INDENT_1}{outside} valor(es) ficaram fora dos limites e estão em branco.")
     pause()
 
 
@@ -3860,10 +4181,12 @@ def menu_columns():
         print(f"{UI_INDENT_1}[7] Converter fórmula em valores")
         print(f"{UI_INDENT_1}[8] Converter tipo da coluna")
         print(f"{UI_INDENT_1}[9] Regras de validação")
+        print(f"{UI_INDENT_1}[A] Normalizar coluna (min-máx, z-score)")
+        print(f"{UI_INDENT_1}[B] Faixas / intervalos (tipo 'faixas etárias')")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3884,6 +4207,10 @@ def menu_columns():
             convert_column_type()
         elif choice == "9":
             menu_rules()
+        elif choice == "A":
+            normalize_column()
+        elif choice == "B":
+            bin_column()
 
 
 def menu_basic_analysis():
@@ -3923,10 +4250,11 @@ def menu_advanced():
         print(f"{UI_INDENT_1}[3] Duplicados (detectar e remover)")
         print(f"{UI_INDENT_1}[4] Dados em falta (contar / preencher / remover)")
         print(f"{UI_INDENT_1}[5] Tabela dinâmica (pivot)")
+        print(f"{UI_INDENT_1}[6] Valores anómalos (outliers)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3939,6 +4267,8 @@ def menu_advanced():
             missing_data()
         elif choice == "5":
             pivot_table_ui()
+        elif choice == "6":
+            outliers()
 
 
 # Ecrã "Sobre" com informação da aplicação
