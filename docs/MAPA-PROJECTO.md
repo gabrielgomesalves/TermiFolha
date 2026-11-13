@@ -1,6 +1,6 @@
 # Mapa do projecto — TermiFolha v1.0
 
-> Documento da Fase 1 (descoberta). Estado verificado a partir do código e do manual em PDF, antes de qualquer alteração.
+> Documento da Fase 1 (descoberta). Estado verificado a partir do código e do manual em PDF, **antes de qualquer alteração (v1.0)**. É um retrato histórico: os nomes de funções e variáveis são os originais em português (correspondência em `RENOMEACOES.md`) e a persistência por `pickle` já foi substituída por JSON. Para o estado actual, ver `ARQUITECTURA.md`.
 
 ## 1. Resumo
 

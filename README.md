@@ -1,71 +1,56 @@
 # TermiFolha
 
-Folha de cálculo em linha de comando, em Python. Cria, edita, filtra e analisa tabelas com colunas tipadas (texto, inteiro, decimal, data), desenha gráficos e importa/exporta Excel, CSV, Word e PDF. O estado é gravado automaticamente entre sessões.
+Folha de cálculo em linha de comando, em Python, num único ficheiro (`TermiFolha.py`). Cria, edita, filtra e analisa tabelas com colunas tipadas (texto, inteiro, decimal, data), desenha gráficos e importa/exporta Excel e CSV, e exporta Word e PDF. O estado é gravado automaticamente entre sessões.
 
-Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.0 · Manual completo: `Manual do Utilizador — TermiFolha v1.0.pdf`
+Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.1 · Manual: [`docs/MANUAL.md`](docs/MANUAL.md)
 
 ## Instalação
 
-Testado em Python 3.13. O código usa `zip(strict=True)`, por isso exige 3.10 ou superior; o pandas 3 exige 3.11 ou superior.
-
 ```
 pip install -r requirements.txt
-```
-
-> `fpdf2` e o pacote antigo `fpdf` instalam ambos o módulo `fpdf` e **não devem coexistir**. Se o `pip list` mostrar `fpdf`, execute `pip uninstall fpdf` antes de instalar `fpdf2`. O programa funciona com ambos.
-
-## Utilização
-
-```
 python TermiFolha.py
 ```
 
-Navegue pelos menus com o número ou a letra da opção. Escrever `sair` num prompt cancela a operação. O manual descreve todos os menus.
+Testado em Python 3.13. O pandas 3 exige 3.11 ou superior.
 
-Exemplo rápido: `[1] Folha` → `[6] Folha dummy` cria dados de exemplo; depois `[5] Estatísticas` → `[2]` → `Salario` mostra média, soma, mínimo, máximo e mediana.
+> `fpdf2` e o pacote antigo `fpdf` instalam ambos o módulo `fpdf` e **não devem coexistir**. Se o `pip list` mostrar `fpdf`, execute `pip uninstall fpdf` antes de instalar `fpdf2`. O programa funciona com ambos, mas só o `fpdf2` exporta PDF com caracteres fora de Latin-1 (`ż`, `€`, …).
 
-### Novidades face ao manual v1.0
+## Utilização
 
-- **Folha → [8] Importar CSV / [9] Exportar CSV.** Detecta o separador (`,` `;` tab `|`) e a codificação (UTF-8 ou Latin-1). Datas `DD/MM/AAAA` são reconhecidas; códigos com zeros à esquerda (`007`) ficam como texto. A exportação usa UTF-8 com BOM para o Excel mostrar os acentos.
-- **Amostra aleatória** aceita número de linhas (`3`) ou percentagem (`20%`).
-- **Remover linha** mostra a linha antes de pedir confirmação.
-- **Adicionar coluna:** Enter deixa a célula em branco (aparece `--`).
+Navegue pelos menus com o número ou a letra da opção; `sair` cancela uma operação. O manual descreve todos os menus.
 
-### Diferenças face ao manual (o código é a referência)
+Exemplo: `[1] Folha` → `[6] Folha dummy` cria dados de exemplo; depois `[5] Estatísticas` → `[2]` → `Salario` mostra média, soma, mínimo, máximo e mediana.
 
-| Manual | Comportamento real |
-|---|---|
-| Folha dummy com 10 linhas | 8 linhas |
-| Adicionar linhas "pede quantas" | introduz linhas em ciclo até escrever `sair` |
-| Describe e Únicos "de todas as colunas" | pedem uma coluna |
-| Limpar folha é irreversível e apaga o histórico | o passo entra no histórico e **pode ser desfeito** com `[U]` |
-| Preencher com média/mediana | em colunas inteiras o valor é arredondado |
+O estado fica em `.termifolha_estado.json` e os erros em `.termifolha.log`, ambos na pasta do programa.
 
-O ficheiro de estado `.termifolha_estado.pkl` fica **na pasta do programa**, não no directório onde se executa o comando.
+### Ficheiros gerados e actualização da v1.0
+
+A v1.0 guardava o estado em `.termifolha_estado.pkl`. Ao arrancar, a v1.1 migra-o automaticamente (com uma leitura restrita que só aceita DataFrames) e guarda uma cópia como `.pkl.migrado`.
 
 ## Desenvolvimento
 
 ```
 pip install -r requirements-dev.txt
-python -m pytest          # 53 testes
+python -m pytest          # 90 testes
 python -m ruff check .    # lint
 ```
 
-Os testes simulam o teclado (fixture `app` em `tests/conftest.py`) e correm cada operação do programa. Avisos de depreciação (`DeprecationWarning`) falham os testes de propósito.
-
-Estrutura:
+Os testes simulam o teclado (fixture `app` em `tests/conftest.py`). Avisos de depreciação (`DeprecationWarning`) falham os testes de propósito. Dois testes dependem da versão do `fpdf` e são saltados no ambiente a que não se aplicam.
 
 ```
-TermiFolha.py        # aplicação (ponto de entrada)
+TermiFolha.py        # toda a aplicação (ponto de entrada)
 tests/               # testes pytest
-docs/                # MAPA-PROJECTO, DIAGNOSTICO, ARQUITECTURA, ROADMAP
+docs/                # MANUAL, ARQUITECTURA, MAPA-PROJECTO, DIAGNOSTICO, ROADMAP, RENOMEACOES
 requirements*.txt    # dependências
 pyproject.toml       # configuração do pytest e do ruff
 ```
 
+O código está em inglês (funções, variáveis, constantes); mensagens, comentários e documentação em português. A equivalência com os nomes da v1.0 está em [`docs/RENOMEACOES.md`](docs/RENOMEACOES.md).
+
 ## Limitações conhecidas
 
-- O estado é guardado com `pickle`: não abra ficheiros `.termifolha_estado.pkl` de origem desconhecida. Ver `docs/ROADMAP.md`.
-- O manual PDF não foi actualizado e tem as divergências acima.
-- Importar Excel não pede confirmação antes de substituir a folha actual (recuperável com `[U]`).
-- PDF: caracteres fora de Latin-1 (ex.: `ż`) aparecem como `?`. Excel e Word não têm esta limitação.
+- O manual em PDF da v1.0 está desactualizado; o de referência é `docs/MANUAL.md`.
+- A tabela do PDF trunca as células a 14 caracteres.
+- Com o `fpdf` antigo, caracteres fora de Latin-1 aparecem como `?` no PDF.
+- O histórico de desfazer tem 4 passos.
+- Os nomes das funções de teste estão em português (descrevem o comportamento esperado).

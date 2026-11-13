@@ -1,44 +1,61 @@
 # Arquitectura
 
-Aplicação de ficheiro único (`TermiFolha.py`), procedural, com estado global. Descrição completa dos módulos e fluxos em `MAPA-PROJECTO.md`; esta página regista as decisões e os pontos de extensão.
+Aplicação de ficheiro único (`TermiFolha.py`), procedural, com estado global. Por decisão do dono do projecto mantém-se assim. Os nomes em inglês; ver `RENOMEACOES.md` para a correspondência com a v1.0. `MAPA-PROJECTO.md` é o retrato inicial (nomes antigos).
 
 ## Estado
 
 | Variável | Conteúdo |
 |---|---|
-| `tabela` | `pandas.DataFrame` activo |
-| `tipos` | `dict` coluna → tipo (`str`, `int`, `float`, `"date"`). O tipo vive aqui, não no DataFrame |
-| `undo`, `redo` | listas de `(DataFrame, dict)`; limite `HIST_LIMITE = 4` |
-| `FICHEIRO_ESTADO` | `.termifolha_estado.pkl`, na pasta do programa |
+| `table` | `pandas.DataFrame` activo |
+| `col_types` | `dict` coluna → tipo (`str`, `int`, `float`, `DATE_TYPE`). O tipo vive aqui, não no DataFrame |
+| `undo_stack`, `redo_stack` | listas de `(DataFrame, dict)`; limite `HISTORY_LIMIT = 4` |
+| `STATE_FILE` | `.termifolha_estado.json`, na pasta do programa |
+| `LEGACY_STATE_FILE` | `.termifolha_estado.pkl` (v1.0), só lido para migrar |
+| `LOG_FILE` | `.termifolha.log`, só criado por `main()` |
 
-## Invariantes (o que `aplicar_tipos` garante)
+## Invariantes (o que `apply_types` garante)
 
-- Colunas `int` → `Int64` (aceita valores em falta); `float` → `float64`; `data` → `datetime64`; `texto` → como vier.
-- Toda a operação que altera dados termina com `guardar_estado()` e `registar_ponto()`.
-- Nomes de colunas são sempre `str` (a importação converte cabeçalhos numéricos).
+- `int` → `Int64` (aceita valores em falta); `float` → `float64`; data → `datetime64`; texto → como vier.
+- Toda a operação que altera dados termina com `save_state()` e `record_checkpoint()`.
+- Nomes de colunas são sempre `str`.
+
+## Persistência
+
+```
+save_state()  → _state_to_dict() → JSON → ficheiro .tmp → os.replace()      (atómico)
+load_state()  → JSON válido?  → _state_from_dict() → apply_types()
+              → senão, só há .pkl? → _SafeUnpickler → migra, grava JSON, renomeia para .pkl.migrado
+              → ficheiro inválido → preservado como .corrompido, sessão vazia, utilizador avisado
+```
+
+Formato JSON: `{"versao": 1, "colunas": [...], "tipos": {col: "str|int|float|date"}, "dados": [[...]]}`; datas em ISO 8601; valores em falta `null`. As chaves ficam em português para que os ficheiros já gravados continuem válidos. `_state_from_dict` valida a estrutura (versão, tipos de colunas, comprimento de cada linha) antes de aceitar o conteúdo.
+
+**Leitura restrita do `.pkl`:** `_SafeUnpickler.find_class` só devolve classes de `pandas`/`numpy` necessárias para reconstruir um DataFrame, `builtins` inócuos e nada mais; recusa nomes com ponto e `pandas.core.computation`. Testado com payloads que tentam `os.system` e `pandas.eval`.
 
 ## Fluxo de importação
 
 ```
-importar() / importar_csv()
-   └─ lê ficheiro → DataFrame
-       └─ adoptar_dataframe(df, detectar_datas)
-            ├─ nomes de colunas → str
-            ├─ (CSV) texto DD/MM/AAAA → datetime
-            ├─ tipos = inferir_tipo por coluna
-            └─ só aqui altera tabela/tipos → aplicar_tipos → guardar → registar_ponto
+import_excel() / import_csv()
+   └─ confirm_replace_sheet()  (se já existir folha)
+       └─ lê ficheiro → DataFrame
+           └─ adopt_dataframe(df, detect_dates, ask_integers)
+                ├─ nomes de colunas → str
+                ├─ (Excel) colunas só com inteiros e células vazias → pergunta ao utilizador
+                ├─ (CSV) texto DD/MM/AAAA → datetime
+                ├─ col_types = infer_type por coluna
+                └─ só aqui altera table/col_types → apply_types → save_state → record_checkpoint
 ```
 
-O CSV não usa a inferência do pandas: lê tudo como texto (`dtype=str`) e `_numerica_ou_texto` decide, para manter inteiros com falhas como `Int64` e códigos como `007` como texto.
+O CSV não usa a inferência do pandas: lê tudo como texto (`dtype=str`) e `_numeric_or_text` decide (inteiros com falhas → `Int64`, `1,5` → decimal, `007` → texto).
 
 ## Exportação PDF
 
-Só fontes core (Latin-1). `_latin1` substitui o resto por `?` e `_pdf_linha` evita `cell(ln=True)`, de modo a funcionar em `fpdf` 1.7 e `fpdf2` sem avisos.
+`_configure_pdf_font` regista a DejaVu Sans (incluída no matplotlib) quando o `fpdf` é o `fpdf2`; com o `fpdf` 1.7 mantém Helvetica porque este escreve ficheiros de cache na pasta da fonte. `_pdf_text` reduz a Latin-1 quando não há fonte Unicode e `_pdf_line` evita o `cell(ln=True)` deprecado.
+
+## Registo
+
+`log = logging.getLogger("termifolha")` com `NullHandler`: importar o módulo não cria ficheiros. `configure_log()` (chamada por `main()`) acrescenta um `RotatingFileHandler` de 256 KB. Os blocos `except` de importação, exportação e gravação usam `log.exception`.
 
 ## Testes
 
-`tests/conftest.py` fornece a fixture `app`: isola o estado global, aponta o ficheiro de estado para uma pasta temporária e substitui `input()`. Um teste escreve as respostas do utilizador em sequência (`app.run(app.m.funcao, "resp1", "resp2")`). Se a aplicação pedir mais entradas do que as fornecidas, o teste falha com a pergunta em causa.
-
-## Dívida técnica conhecida
-
-Ver `ROADMAP.md`, itens 1 (`pickle`) e 2 (separar lógica de interface).
+`tests/conftest.py` fornece a fixture `app`: isola o estado global, aponta os ficheiros de estado para uma pasta temporária e substitui `input()`. Um teste escreve as respostas do utilizador em sequência (`app.run(app.m.add_column, "Nome", "1", ...)`). Se a aplicação pedir mais entradas do que as fornecidas, o teste falha com a pergunta em causa.

@@ -13,7 +13,7 @@
 # TermiFolha — Folha de Cálculo CLI
 #
 # Autor: Gabriel Gomes Alves
-# Versão: 1.0
+# Versão: 1.1
 #
 # Descrição: TermiFolha é uma aplicação de folha de cálculo em linha de comando, permite criar, editar, filtrar e analisar dados de uma folha de cálculo (DataFrame) de forma simples e eficiente.
 #
@@ -25,9 +25,10 @@
 # - Estatísticas descritivas e análise de dados
 # - Visualizações simples (histogramas, gráficos de linha, heatmaps)
 # - Suporte a tipos de dados: texto, inteiro, decimal e data
-# - Undo/Redo e guardar automático do estado
+# - Importar e exportar Excel e CSV; exportar Word e PDF
+# - Undo/Redo e guardar automático do estado (JSON)
 #
-# Requisitos: Python 3.x, pickle, numpy, pandas, matplotlib, python-docx, fpdf2
+# Requisitos: Python 3.11+, numpy, pandas, matplotlib, openpyxl, python-docx, fpdf2 (ver requirements.txt)
 #
 # Uso: Execute o script e siga as instruções no terminal para interagir com a folha de cálculo.
 #
@@ -58,7 +59,7 @@ from fpdf import FPDF
 # Constantes da aplicação (nome, versão, ficheiros, dimensões UI)
 APP_NAME          = "TermiFolha"
 APP_TITLE        = "TermiFolha  —  Folha de Cálculo CLI"
-APP_VERSION        = "1.0"
+APP_VERSION        = "1.1"
 APP_AUTHOR         = "Gabriel Gomes Alves"
 _PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")
@@ -463,7 +464,7 @@ _PICKLE_PANDAS_TOPO = {  # nunca "eval", "read_pickle", ...
 }
 
 
-class _UnpicklerSeguro(pickle.Unpickler):
+class _SafeUnpickler(pickle.Unpickler):
     """Só deixa reconstruir DataFrames: recusa qualquer outro objecto (os.system, pandas.eval, ...)."""
 
     def find_class(self, module, name):
@@ -506,7 +507,7 @@ def load_state():
     elif os.path.exists(LEGACY_STATE_FILE):
         try:
             with open(LEGACY_STATE_FILE, "rb") as f:
-                old_table, old_col_types = _UnpicklerSeguro(f).load()
+                old_table, old_col_types = _SafeUnpickler(f).load()
             if not isinstance(old_table, pd.DataFrame) or not isinstance(old_col_types, dict):
                 raise ValueError("conteúdo inesperado")
             old_table = old_table.copy()

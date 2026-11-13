@@ -72,7 +72,7 @@ Qualquer alteração futura é cega. `fpdf` e `fpdf2` expõem o mesmo módulo `f
 - **`filtro_texto` interpretava o termo como expressão regular** [R]: pesquisar `(` dava `PatternError`. Corrigido com `regex=False` (junto com M6).
 - **`inplace=True`** [R com pandas 3.1]: `Pandas4Warning`, será removido. 5 ocorrências, corrigidas.
 - **Importação (Excel) deixava o estado global meio alterado** se a inferência de tipos falhasse a meio [L]. Corrigido em `adoptar_dataframe`.
-- **Inteiros com células vazias importados do Excel ficam "decimal"** [R]: o pandas converte-os para `float64` e não há forma fiável de os distinguir de decimais inteiros (`2000.0`). **Não corrigido** para Excel; o CSV usa inferência própria. Ver ROADMAP.
+- **Inteiros com células vazias importados do Excel ficam "decimal"** [R]: o pandas converte-os para `float64` e não há forma fiável de os distinguir de decimais inteiros (`2000.0`). **Corrigido** perguntando ao utilizador (só quando há ambiguidade); o CSV usa inferência própria.
 
 ## Estado após as correcções
 
@@ -82,15 +82,15 @@ Qualquer alteração futura é cega. `fpdf` e `fpdf2` expõem o mesmo módulo `f
 | A2 datas como `object` | corrigido | `fix(A2)` |
 | A3 cabeçalhos numéricos | corrigido | `fix(A3)` |
 | M1 erros engolidos | corrigido | `fix(M1,M3)` |
-| M2 `pickle` | **pendente, precisa de decisão** | ROADMAP #1 |
+| M2 `pickle` | corrigido: JSON atómico + migração com leitura restrita | `feat(M2)` |
 | M3 ficheiro de estado relativo | corrigido | `fix(M1,M3)` |
 | M4 coluna em branco | corrigido | `fix(M4)` |
 | M5 limpar folha vs manual | **decisão por omissão**: mantém-se reversível com Desfazer; o manual é que está desactualizado | ver README |
 | M6 filtro de texto | corrigido | `fix(M6)` |
 | M7 testes, dependências, `.gitignore`, README | corrigido | 53 testes, `requirements*.txt`, `pyproject.toml` |
-| B1 manual ↔ código | parcial: corrigidos remover linha e amostra; as restantes divergências ficam documentadas | README, secção "Diferenças face ao manual" |
-| B2 importar sem confirmar | pendente | ROADMAP |
-| B3 monólito | pendente | ROADMAP #2 |
+| B1 manual ↔ código | corrigido: remover linha, amostra por percentagem, describe/únicos de todas as colunas; manual reescrito em `MANUAL.md` | `fix(B1)`, `feat` |
+| B2 importar sem confirmar | corrigido | `feat` |
+| B3 monólito | **por decisão do dono, a aplicação mantém-se num único ficheiro**; identificadores traduzidos | `refactor` |
 | B4 PDF | corrigido | `fix(B4)` |
 | B5 avisos do ruff | corrigido | lint limpo com a configuração do projecto |
 

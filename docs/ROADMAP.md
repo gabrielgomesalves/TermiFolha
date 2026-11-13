@@ -1,20 +1,32 @@
 # Roadmap
 
-Backlog ordenado por impacto × esforço × risco. Itens com ✋ precisam de uma decisão do dono do projecto.
+Estado do backlog definido na auditoria. A aplicação mantém-se num **único ficheiro** por decisão do dono do projecto.
 
-| # | Item | Impacto | Esforço | Risco | Notas |
-|---|---|---|---|---|---|
-| 1 | ✋ **Substituir `pickle` por formato seguro** (JSON com tipos explícitos) | Alto | Médio | Médio | Carregar um `.pkl` adulterado executa código. A troca exige migração: ler o `.pkl` antigo uma vez e regravar. Decidir se se aceita manter a leitura de `pickle` só para migrar. |
-| 2 | **Separar lógica de interface** em módulos (`dados`, `persistencia`, `exportacao`, `graficos`, `ui`) | Alto | Alto | Médio | Hoje cada função mistura `input`, `print` e cálculo. Os 53 testes protegem a refactorização. Manter `python TermiFolha.py` como entrada. |
-| 3 | Importar Excel: inteiros com células vazias ficam "decimal" | Médio | Baixo | Baixo | Limitação do pandas. Opção: perguntar ao utilizador o tipo de cada coluna ambígua. |
-| 4 | Confirmar antes de importar (Excel/CSV) se já existir folha | Médio | Baixo | Baixo | Hoje é recuperável com `[U]`. |
-| 5 | CSV com vírgula decimal e separador `;` (Excel em português) | Médio | Baixo | Baixo | Hoje `1,5` entra como texto. |
-| 6 | Describe e Únicos para todas as colunas de uma vez | Baixo | Baixo | Baixo | O manual promete. |
-| 7 | ✋ **Actualizar o manual PDF** | Médio | Baixo | Baixo | A fonte do PDF não está no repositório, por isso não o alterei. |
-| 8 | PDF com fonte Unicode (TTF) | Baixo | Médio | Baixo | Obriga a distribuir ou localizar uma fonte. |
-| 9 | ✋ **Identificadores em inglês** | Baixo | Alto | Médio | Foi pedido, mas o projecto inteiro usa português e renomear 80 funções geraria um diff enorme. Recomendo fazê-lo em conjunto com o item 2. |
-| 10 | Registo (`logging`) de erros de gravação e importação | Baixo | Baixo | Baixo | Hoje só há mensagens no ecrã. |
+## Concluído
+
+| Item | Resolução |
+|---|---|
+| `pickle` como formato de estado | Estado em JSON (escrita atómica). O `.pkl` antigo é migrado com um `Unpickler` restrito que recusa `os.system`, `pandas.eval`, etc. |
+| Importar sem confirmar | Excel e CSV pedem confirmação se já existir folha. |
+| Excel: inteiros com células vazias ficavam decimais | O programa pergunta (só quando há ambiguidade). |
+| CSV com vírgula decimal e `;` | Importação reconhece-os; a exportação tem formato Excel PT. |
+| Describe e Únicos para todas as colunas | Enter = todas. |
+| PDF com fonte Unicode | DejaVu Sans (vem com o matplotlib) com `fpdf2`; Latin-1 com o `fpdf` antigo. |
+| Identificadores em inglês | Ver `RENOMEACOES.md`. |
+| Registo de erros | `.termifolha.log` rotativo, configurado só em `main()`. |
+| Manual desactualizado | `docs/MANUAL.md`. O PDF não foi alterado: a fonte não está no repositório. |
+
+## Em aberto
+
+| Item | Impacto | Esforço | Notas |
+|---|---|---|---|
+| Regenerar o manual em PDF a partir de `MANUAL.md` | Baixo | Baixo | Opcional. |
+| Nomes das funções de teste em inglês | Baixo | Médio | Hoje descrevem o comportamento em português. |
+| Fonte Unicode no `fpdf` antigo | Baixo | Médio | Evitado de propósito: o `fpdf` 1.7 escreve ficheiros de cache na pasta da fonte. Basta usar `fpdf2`. |
+| Separar `TermiFolha.py` em módulos | Médio | Alto | **Fora do âmbito por decisão do dono**: a aplicação fica num único ficheiro. Os testes já a protegeriam se esta decisão mudar. |
+| CI nunca executada | Médio | Baixo | `.github/workflows/ci.yml` não correu num repositório real. |
+| Testar noutras versões de Python | Médio | Baixo | Só foi testado em 3.13. |
 
 ## O que não vale a pena (ainda)
 
-API, autenticação, webhooks, Docker: o produto é uma ferramenta local de terminal; não há utilizadores concorrentes nem serviço a expor.
+API, autenticação, webhooks, Docker: o produto é uma ferramenta local de terminal.
