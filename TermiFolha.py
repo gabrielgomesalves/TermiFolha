@@ -252,6 +252,25 @@ def pedir_coluna(mensagem="Coluna"):
     return col
 
 
+_TODAS = object()  # sentinela: "todas as colunas"
+
+
+def pedir_coluna_ou_todas(mensagem="Coluna"):
+    """Como pedir_coluna, mas Enter significa todas as colunas (devolve _TODAS). None se cancelar."""
+    print(f"{UI_INDENTACAO_1}Colunas: {', '.join(tabela.columns)}")
+    valor = input(f"{UI_INDENTACAO_1}{mensagem} (Enter = todas): ").strip()
+    if valor.lower() == "sair":
+        return None
+    if not valor:
+        return _TODAS
+    col = resolver_coluna(valor)
+    if col is None:
+        print(f"{UI_INDENTACAO_1}Coluna não existe.")
+        pausar()
+        return None
+    return col
+
+
 def pedir_coluna_numerica(mensagem="Coluna numérica"):
     num_cols = tabela.select_dtypes(include="number").columns.tolist()
     if not num_cols:
@@ -585,10 +604,21 @@ def nova_folha():
     pausar()
 
 
+def confirmar_substituir_folha():
+    """Se já existir folha, pede confirmação antes de a substituir. Devolve False se o utilizador recusar."""
+    if tabela.columns.empty or confirmar("Folha actual será substituída. Continuar?"):
+        return True
+    print(f"{UI_INDENTACAO_1}Operação cancelada.")
+    pausar()
+    return False
+
+
 def importar():
     global tabela, tipos
     cabecalho("IMPORTAR EXCEL")
     print()
+    if not confirmar_substituir_folha():
+        return
     nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
     if not nome:
         return
@@ -597,7 +627,7 @@ def importar():
         nome += EXT_EXCEL
 
     try:
-        adoptar_dataframe(pd.read_excel(nome))
+        adoptar_dataframe(pd.read_excel(nome), perguntar_inteiros=True)
         print(f"\n{UI_INDENTACAO_1}'{nome}' importado: {len(tabela)} linhas, {len(tabela.columns)} colunas.")
     except FileNotFoundError:
         print(f"\n{UI_INDENTACAO_1}Ficheiro '{nome}' não encontrado.")
@@ -607,7 +637,13 @@ def importar():
     pausar()
 
 
-def adoptar_dataframe(df, detectar_datas=False):
+def _inteiros_com_falhas(serie):
+    """True se for decimal com células vazias e todos os valores presentes forem inteiros (ex.: 25.0, 40.0, NaN)."""
+    validos = serie.dropna()
+    return pd.api.types.is_float_dtype(serie) and 0 < len(validos) < len(serie) and bool((validos % 1 == 0).all())
+
+
+def adoptar_dataframe(df, detectar_datas=False, perguntar_inteiros=False):
     """Torna `df` a folha activa (importação de Excel/CSV).
 
     O estado global só é alterado no fim, por isso uma falha a meio não deixa
@@ -617,6 +653,11 @@ def adoptar_dataframe(df, detectar_datas=False):
     df = df.copy()
     # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
     df.columns = [str(c) for c in df.columns]
+    if perguntar_inteiros:
+        # O pandas converte inteiros com células vazias em decimais; só o utilizador sabe se era intencional.
+        for col in df.columns:
+            if _inteiros_com_falhas(df[col]) and confirmar(f"A coluna '{col}' só tem valores inteiros (e células vazias). Tratar como inteiro?"):
+                df[col] = df[col].astype("Int64")
     if detectar_datas:
         for col in df.columns:
             if inferir_tipo(df[col]) is str:
@@ -661,6 +702,9 @@ def _numerica_ou_texto(serie):
     validos = serie.dropna()
     if validos.empty or validos.str.contains(r"^[+-]?0\d").any():
         return serie
+    if validos.str.fullmatch(r"[+-]?\d+(,\d+)?").all() and validos.str.contains(",").any():  # vírgula decimal (Excel PT)
+        serie = serie.str.replace(",", ".", regex=False)
+        validos = serie.dropna()
     if validos.str.fullmatch(r"[+-]?\d+").all():
         return pd.to_numeric(serie).astype("Int64")
     convertida = pd.to_numeric(serie, errors="coerce")
@@ -688,6 +732,8 @@ def _ler_csv(nome):
 def importar_csv():
     cabecalho("IMPORTAR CSV")
     print()
+    if not confirmar_substituir_folha():
+        return
     nome = input(f"{UI_INDENTACAO_1}Nome do ficheiro (sem extensão): ").strip()
     if not nome:
         return
@@ -720,9 +766,12 @@ def exportar_csv():
     if not nome.endswith(EXT_CSV):
         nome += EXT_CSV
 
+    print(f"{UI_INDENTACAO_1}Formato: [1] Internacional (',' e '.')  [2] Excel português (';' e ',')")
+    sep, decimal = (";", ",") if input(f"{UI_INDENTACAO_1}Opção (Enter = 1): ").strip() == "2" else (",", ".")
+
     try:
         # utf-8-sig: o Excel reconhece os acentos; datas em DD/MM/AAAA, como na aplicação.
-        tabela.to_csv(nome, index=False, encoding="utf-8-sig", date_format="%d/%m/%Y")
+        tabela.to_csv(nome, index=False, sep=sep, decimal=decimal, encoding="utf-8-sig", date_format="%d/%m/%Y")
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
     except Exception as e:
         log.exception("Falha em exportar_csv")
@@ -1471,9 +1520,29 @@ ETIQUETAS_ESTAT = {
 }
 
 
+def _resumo_todas_numericas():
+    numericas = tabela.select_dtypes(include="number")
+    if numericas.columns.empty:
+        print(f"{UI_INDENTACAO_1}Sem colunas numéricas.")
+        pausar()
+        return
+    desc = numericas.describe()
+    larg = {c: max(len(str(c)), 10) for c in desc.columns}
+    print()
+    print(f"{UI_INDENTACAO_1}Resumo estatístico de todas as colunas numéricas:\n")
+    print(UI_INDENTACAO_2 + " " * 22 + " " + " ".join(str(c).rjust(larg[c]) for c in desc.columns))
+    for stat in desc.index:
+        celulas = " ".join(formatar_numero(float(desc.at[stat, c])).rjust(larg[c]) for c in desc.columns)
+        print(UI_INDENTACAO_2 + ETIQUETAS_ESTAT.get(stat, stat).ljust(22) + " " + celulas)
+    pausar()
+
+
 def estat_resumo():
-    col = pedir_coluna()
+    col = pedir_coluna_ou_todas()
     if col is None:
+        return
+    if col is _TODAS:
+        _resumo_todas_numericas()
         return
 
     desc = tabela[col].describe()
@@ -1582,8 +1651,15 @@ def estat_contagem():
 
 
 def estat_unicos():
-    col = pedir_coluna()
+    col = pedir_coluna_ou_todas()
     if col is None:
+        return
+    if col is _TODAS:
+        print()
+        print(f"{UI_INDENTACAO_1}Valores únicos por coluna:\n")
+        for c in tabela.columns:
+            print(UI_INDENTACAO_2 + str(c).ljust(22) + " " + f"{tabela[c].nunique()} (de {int(tabela[c].notna().sum())} não-nulos)")
+        pausar()
         return
     n_unicos = tabela[col].nunique()
     n_total = int(tabela[col].notna().sum())

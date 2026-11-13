@@ -69,6 +69,6 @@ def test_falha_de_exportacao_fica_registada(app, tmp_path, caplog, operacao):
     app.dummy()
 
     with caplog.at_level(logging.ERROR, logger="termifolha"):
-        app.run(getattr(app.m, operacao), "pasta_que_nao_existe/saida")
+        app.run(getattr(app.m, operacao), "pasta_que_nao_existe/saida", "")
 
     assert any(operacao in r.getMessage() for r in caplog.records)

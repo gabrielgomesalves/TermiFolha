@@ -5,7 +5,7 @@ def test_csv_ida_e_volta_preserva_dados_e_tipos(app, tmp_path):
     app.dummy()
     original = app.m.tabela.copy()
 
-    app.run(app.m.exportar_csv, "folha")
+    app.run(app.m.exportar_csv, "folha", "")
     ficheiro = tmp_path / "folha.csv"
     assert ficheiro.exists()
 
@@ -26,7 +26,7 @@ def test_csv_ida_e_volta_preserva_dados_e_tipos(app, tmp_path):
 def test_csv_exportado_usa_datas_em_formato_portugues(app, tmp_path):
     app.dummy()
 
-    app.run(app.m.exportar_csv, "folha")
+    app.run(app.m.exportar_csv, "folha", "")
 
     assert "15/01/2020" in (tmp_path / "folha.csv").read_text(encoding="utf-8-sig")
 
@@ -62,7 +62,7 @@ def test_importar_csv_inexistente_nao_altera_a_folha(app, capsys):
     app.dummy()
     antes = app.m.tabela.copy()
 
-    app.run(app.m.importar_csv, "nao_existe")
+    app.run(app.m.importar_csv, "s", "nao_existe")
 
     assert "não encontrado" in capsys.readouterr().out
     assert app.m.tabela.equals(antes)
@@ -81,7 +81,7 @@ def test_importar_csv_vazio_avisa_e_nao_altera(app, tmp_path, capsys):
     app.dummy()
     linhas = len(app.m.tabela)
 
-    app.run(app.m.importar_csv, "vazio")
+    app.run(app.m.importar_csv, "s", "vazio")
 
     assert "Erro" in capsys.readouterr().out
     assert len(app.m.tabela) == linhas
@@ -122,7 +122,7 @@ def test_importar_csv_preserva_zeros_a_esquerda(app, tmp_path):
 def test_menu_folha_expoe_importar_e_exportar_csv(app, tmp_path):
     (tmp_path / "dados.csv").write_text("A,B\n1,x\n", encoding="utf-8")
 
-    app.run(app.m.menu_folha, "8", "dados", "9", "copia", "0")
+    app.run(app.m.menu_folha, "8", "dados", "9", "copia", "", "0")
 
     assert list(app.m.tabela.columns) == ["A", "B"]
     assert (tmp_path / "copia.csv").exists()
