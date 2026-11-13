@@ -465,6 +465,8 @@ def importar():
 
     try:
         tabela = pd.read_excel(nome)
+        # Cabeçalhos numéricos (ex.: anos) são tratados como texto no resto da aplicação.
+        tabela.columns = [str(c) for c in tabela.columns]
         tipos = {}
         for col in tabela.columns:
             tipos[col] = inferir_tipo(tabela[col])
