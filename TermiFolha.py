@@ -1406,10 +1406,16 @@ def add_row():
                     cancelled = True
                     break
                 try:
-                    new_row[col] = convert_value(val, col_type)
-                    break
+                    converted = convert_value(val, col_type)
                 except Exception:
                     print(f"{UI_INDENT_1}Valor inválido para {type_label}.")
+                    continue
+                problem = rule_violation(col, converted)
+                if problem:
+                    print(f"{UI_INDENT_1}Regra da coluna '{col}': {problem}.")
+                    continue
+                new_row[col] = converted
+                break
             if cancelled:
                 break
 
@@ -1485,10 +1491,16 @@ def edit_cell():
             pause()
             return
         try:
-            table.at[idx, col] = convert_value(loaded, col_type)
-            break
+            converted = convert_value(loaded, col_type)
         except Exception:
             print(f"{UI_INDENT_1}Valor inválido.")
+            continue
+        problem = rule_violation(col, converted)
+        if problem:
+            print(f"{UI_INDENT_1}Regra da coluna '{col}': {problem}.")
+            continue
+        table.at[idx, col] = converted
+        break
 
     commit()
     print(f"\n{UI_INDENT_1}Célula atualizada.")
@@ -2837,6 +2849,376 @@ def menu_charts():
             plot_polynomial_trend()
 
 
+# Regras de validação por coluna: mínimo/máximo (números e datas), valores permitidos e obrigatório
+def _is_blank(value):
+    return (isinstance(value, str) and not value.strip()) or (not isinstance(value, str) and pd.isna(value))
+
+
+def _rule_bound(raw, col_type):
+    """Converte o limite guardado (texto) para o tipo da coluna. Levanta ValueError se for inválido."""
+    return convert_value(str(raw), col_type) if col_type == DATE_TYPE else float(str(raw).replace(",", "."))
+
+
+def _is_allowed(value, allowed, col_type):
+    if col_type in (int, float):
+        try:
+            return any(float(value) == float(a.replace(",", ".")) for a in allowed)
+        except ValueError:
+            return False
+    shown = format_value(value) if col_type == DATE_TYPE else str(value)
+    return shown.lower() in [a.lower() for a in allowed]
+
+
+def rule_violation(col, value):
+    """Mensagem se `value` (já no tipo da coluna; vazio = em branco) violar as regras da coluna; None se estiver tudo bem."""
+    rule = meta["rules"].get(col)
+    if not rule:
+        return None
+    if _is_blank(value):
+        return "o valor é obrigatório" if rule.get("required") else None
+    col_type = type_of(col)
+    allowed = rule.get("allowed")
+    if allowed and not _is_allowed(value, allowed, col_type):
+        return f"valor fora dos permitidos ({', '.join(allowed)})"
+    if col_type in (int, float, DATE_TYPE):
+        for key, label, violates in (("min", "mínimo", operator.lt), ("max", "máximo", operator.gt)):
+            if rule.get(key) is None:
+                continue
+            try:
+                if violates(value, _rule_bound(rule[key], col_type)):
+                    return f"{'abaixo' if key == 'min' else 'acima'} do {label} ({rule[key]})"
+            except (ValueError, TypeError):
+                log.warning("Limite inválido na regra de %r: %r", col, rule[key])
+    return None
+
+
+def find_violations():
+    """Todas as células da folha activa que violam regras: lista de (índice da linha, coluna, valor, mensagem)."""
+    found = []
+    for col, rule in meta["rules"].items():
+        if col in table.columns and rule:
+            for idx, value in table[col].items():
+                problem = rule_violation(col, value)
+                if problem:
+                    found.append((idx, col, value, problem))
+    return found
+
+
+def _ask_rule_bound(label, col, col_type):
+    """Pede um limite; Enter = sem limite. Devolve (texto, ok). ok=False se for inválido."""
+    raw = input(f"{UI_INDENT_1}{label} de '{col}' ({'DD/MM/AAAA' if col_type == DATE_TYPE else 'número'}; Enter = sem limite): ").strip()
+    if not raw:
+        return None, True
+    try:
+        _rule_bound(raw, col_type)
+    except ValueError:
+        print(f"{UI_INDENT_1}Valor inválido.")
+        pause()
+        return None, False
+    return raw, True
+
+
+def set_rule():
+    col = ask_column("Coluna a validar")
+    if col is None:
+        return
+    col_type = type_of(col)
+    rule = {}
+    if col_type in (int, float, DATE_TYPE):
+        low, ok = _ask_rule_bound("Mínimo", col, col_type)
+        if not ok:
+            return
+        high, ok = _ask_rule_bound("Máximo", col, col_type)
+        if not ok:
+            return
+        if low is not None and high is not None and _rule_bound(low, col_type) > _rule_bound(high, col_type):
+            print(f"{UI_INDENT_1}O mínimo é maior do que o máximo.")
+            pause()
+            return
+        rule.update({k: v for k, v in (("min", low), ("max", high)) if v is not None})
+    allowed_text = input(f"{UI_INDENT_1}Valores permitidos, separados por vírgula (Enter = qualquer): ").strip()
+    allowed = [a.strip() for a in allowed_text.split(",") if a.strip()]
+    if allowed:
+        if col_type is not str and any(not _is_valid_for_type(a, col_type) for a in allowed):
+            print(f"{UI_INDENT_1}Há valores permitidos que não são do tipo da coluna.")
+            pause()
+            return
+        rule["allowed"] = allowed
+    if confirm("Valor obrigatório (não aceitar em branco)?"):
+        rule["required"] = True
+    if not rule:
+        print(f"{UI_INDENT_1}Nenhuma regra definida.")
+        pause()
+        return
+    meta["rules"][col] = rule
+    commit()
+    existing = [v for v in find_violations() if v[1] == col]
+    if existing:
+        print(f"\n{UI_INDENT_1}Regra guardada para '{col}'. {len(existing)} valor(es) existente(s) violam-na.")
+    else:
+        print(f"\n{UI_INDENT_1}Regra guardada para '{col}'. Os dados existentes cumprem-na.")
+    pause()
+
+
+def _is_valid_for_type(text, col_type):
+    try:
+        convert_value(text.replace(",", ".") if col_type in (int, float) else text, col_type)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def remove_rule():
+    if not meta["rules"]:
+        print(f"{UI_INDENT_1}Não há regras definidas.")
+        pause()
+        return
+    col = ask_column("Coluna cujas regras remover")
+    if col is None:
+        return
+    if meta["rules"].pop(col, None) is None:
+        print(f"{UI_INDENT_1}'{col}' não tem regras.")
+    else:
+        commit()
+        print(f"{UI_INDENT_1}Regras de '{col}' removidas.")
+    pause()
+
+
+def check_rules():
+    violations = find_violations()
+    print()
+    if not violations:
+        print(f"{UI_INDENT_1}Todos os valores cumprem as regras definidas.")
+    else:
+        print(f"{UI_INDENT_1}{len(violations)} violação(ões):")
+        for idx, col, value, problem in violations[:20]:
+            print(f"{UI_INDENT_2}linha {idx}, '{col}' = {format_value(value)}: {problem}")
+        if len(violations) > 20:
+            print(f"{UI_INDENT_2}... e mais {len(violations) - 20}.")
+    pause()
+
+
+def menu_rules():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    while True:
+        header("REGRAS DE VALIDAÇÃO")
+        if meta["rules"]:
+            for col, rule in meta["rules"].items():
+                parts = [f"{k}={v}" for k, v in rule.items() if k != "allowed"] + ([f"permitidos={'|'.join(rule['allowed'])}"] if rule.get("allowed") else [])
+                print(f"{UI_INDENT_2}{col}: {', '.join(parts)}")
+        else:
+            print(f"{UI_INDENT_2}(sem regras)")
+        print(f"\n{UI_INDENT_1}[1] Definir regra  [2] Remover regras de uma coluna  [3] Verificar a folha  [0] Voltar")
+        print("-" * WIDTH)
+        choice = ask_option({"1", "2", "3", "0"})
+        if choice == "0":
+            break
+        elif choice == "1":
+            set_rule()
+        elif choice == "2":
+            remove_rule()
+        elif choice == "3":
+            check_rules()
+
+
+# Converter o tipo de uma coluna
+def _plain_text(value):
+    """Texto sem perdas de um valor: inteiros sem '.0', decimais com todos os dígitos, datas DD/MM/AAAA."""
+    if hasattr(value, "strftime"):
+        return value.strftime("%d/%m/%Y")
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        return str(int(value)) if float(value).is_integer() else repr(float(value))
+    return str(value)
+
+
+def convert_series(series, source_type, target_type):
+    """Converte `series` de `source_type` para `target_type`. Devolve (série nova, máscara das células com valor que falharam).
+
+    Levanta ValueError se a combinação não fizer sentido (número <-> data).
+    """
+    numeric = (int, float)
+    if (source_type == DATE_TYPE and target_type in numeric) or (source_type in numeric and target_type == DATE_TYPE):
+        raise ValueError("não é possível converter entre números e datas (passe por texto)")
+    present = series.notna()
+    text = series.map(lambda v: _plain_text(v).strip() if pd.notna(v) else None)
+    if target_type is str:
+        return text.astype(object), pd.Series(False, index=series.index)
+    if target_type == DATE_TYPE:
+        converted = pd.to_datetime(text, format="%d/%m/%Y", errors="coerce")
+        return converted, present & converted.isna()
+    numbers = pd.to_numeric(text.str.replace(",", ".", regex=False), errors="coerce")
+    ok = numbers.notna()
+    if target_type is int:
+        ok = ok & (numbers % 1 == 0)  # 1.5 não pode ser inteiro: falha em vez de arredondar em silêncio
+        return numbers.where(ok).astype("Int64"), present & ~ok
+    return numbers.astype("float64"), present & ~ok
+
+
+def convert_column_type():
+    if table.columns.empty:
+        print(f"{UI_INDENT_1}Crie uma folha primeiro.")
+        pause()
+        return
+    header("CONVERTER TIPO DA COLUNA")
+    print()
+    col = ask_column("Coluna a converter")
+    if col is None:
+        return
+    if col in meta["formulas"]:
+        print(f"{UI_INDENT_1}'{col}' é uma coluna calculada; o tipo vem da fórmula.")
+        pause()
+        return
+    source_type = type_of(col)
+    print(f"{UI_INDENT_1}Tipo actual: {TYPE_NAME.get(source_type, 'texto')}")
+    target_type = ask_type()
+    if target_type == source_type:
+        print(f"{UI_INDENT_1}A coluna já é desse tipo.")
+        pause()
+        return
+    try:
+        converted, failed = convert_series(table[col], source_type, target_type)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
+    n_failed = int(failed.sum())
+    print(f"\n{UI_INDENT_1}{int(table[col].notna().sum()) - n_failed} valor(es) convertido(s), {n_failed} não convertido(s).")
+    if n_failed:
+        examples = ", ".join(f"linha {i}: '{format_value(table.at[i, col])}'" for i in list(failed[failed].index)[:5])
+        print(f"{UI_INDENT_1}Não convertidos (ficam em branco): {examples}{' ...' if n_failed > 5 else ''}")
+        if not confirm("Continuar mesmo assim?"):
+            print(f"\n{UI_INDENT_1}Operação cancelada.")
+            pause()
+            return
+    table[col] = converted
+    col_types[col] = target_type
+    if meta["rules"].pop(col, None) or meta["formats"].pop(col, None):
+        print(f"{UI_INDENT_1}As regras e o formato de '{col}' foram removidos (já não se aplicam ao novo tipo).")
+    apply_types()
+    commit()
+    print(f"\n{UI_INDENT_1}'{col}' é agora {TYPE_NAME.get(target_type, 'texto')}.")
+    pause()
+
+
+# Procurar e substituir
+def _replace_in_text(series, find, replacement, whole_cell, case_sensitive):
+    """Colunas de texto: troca parte do texto (ou a célula inteira, se `whole_cell`). Devolve (série nova, máscara)."""
+    pattern = re.compile(("^" + re.escape(find) + "$") if whole_cell else re.escape(find), 0 if case_sensitive else re.IGNORECASE)
+    text = series.astype(object)
+    match = text.map(lambda v: isinstance(v, str) and pattern.search(v) is not None)
+    new = text.map(lambda v: pattern.sub(lambda _: replacement, v) if isinstance(v, str) else v)
+    return new, match
+
+
+def _replace_whole_value(series, col_type, find, replacement, col):
+    """Colunas numéricas e de datas: troca as células cujo valor é igual a `find`. Devolve (série nova, máscara)."""
+    shown = series.map(lambda v: _plain_text(v) if pd.notna(v) else None)
+    if col_type in (int, float):
+        try:
+            match = pd.to_numeric(shown, errors="coerce").eq(float(find.strip().replace(",", ".")))
+        except ValueError:
+            match = pd.Series(False, index=series.index)
+    else:
+        match = shown.eq(find.strip())
+    if not match.any():
+        return series, match
+    if replacement.strip():
+        try:
+            new_value = convert_value(replacement.replace(",", ".") if col_type in (int, float) else replacement, col_type)
+        except (ValueError, TypeError):
+            raise ValueError(f"'{replacement}' não é válido para a coluna '{col}' ({TYPE_NAME.get(col_type, 'texto')})") from None
+    else:
+        new_value = None  # substituir por nada = deixar em branco
+    return series.astype(object).where(~match, new_value), match
+
+
+def plan_replace(find, replacement, columns, whole_cell=False, case_sensitive=False):
+    """Calcula (sem alterar a folha) as substituições: devolve {coluna: (série nova, máscara das células alteradas)}.
+
+    Em colunas de texto pode substituir parte do texto; nas numéricas e de datas só substitui células iguais.
+    Levanta ValueError se `replacement` não for válido para o tipo de alguma coluna.
+    """
+    plan = {}
+    for col in columns:
+        col_type = type_of(col)
+        if col_type is str:
+            new, match = _replace_in_text(table[col], find, replacement, whole_cell, case_sensitive)
+        else:
+            new, match = _replace_whole_value(table[col], col_type, find, replacement, col)
+        if match.any():
+            plan[col] = (new, match)
+    return plan
+
+
+def replace_violations(plan):
+    """Violações de regras que a aplicação de `plan` causaria: lista de (índice, coluna, valor, mensagem)."""
+    found = []
+    for col, (new, match) in plan.items():
+        for idx in match[match].index:
+            problem = rule_violation(col, new[idx])
+            if problem:
+                found.append((idx, col, new[idx], problem))
+    return found
+
+
+def find_replace():
+    if table.empty:
+        print(f"{UI_INDENT_1}Sem dados.")
+        pause()
+        return
+    header("PROCURAR E SUBSTITUIR")
+    print()
+    scope = ask_column_or_all("Coluna")
+    if scope is None:
+        return
+    columns = [c for c in table.columns if c not in meta["formulas"]] if scope is _ALL else [scope]
+    if scope is not _ALL and scope in meta["formulas"]:
+        print(f"{UI_INDENT_1}'{scope}' é uma coluna calculada e não pode ser alterada.")
+        pause()
+        return
+    find = input(f"{UI_INDENT_1}Procurar ('sair' cancela): ")
+    if not find.strip() or find.lower() == "sair":
+        return
+    replacement = input(f"{UI_INDENT_1}Substituir por (Enter = vazio): ")
+    whole_cell = confirm("Só células inteiras iguais (em vez de parte do texto)?")
+    case_sensitive = confirm("Distinguir maiúsculas de minúsculas?")
+    try:
+        plan = plan_replace(find, replacement, columns, whole_cell, case_sensitive)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
+    if not plan:
+        print(f"\n{UI_INDENT_1}Nada encontrado.")
+        pause()
+        return
+    print()
+    for col, (_new, match) in plan.items():
+        print(f"{UI_INDENT_2}{col}: {int(match.sum())} célula(s)")
+    violations = replace_violations(plan)
+    if violations:
+        print(f"\n{UI_INDENT_1}A substituição violaria regras de validação ({len(violations)} célula(s)); nada foi alterado.")
+        for idx, col, value, problem in violations[:5]:
+            print(f"{UI_INDENT_2}linha {idx}, '{col}' = {format_value(value)}: {problem}")
+        pause()
+        return
+    if not confirm(f"Substituir {sum(int(m.sum()) for _, m in plan.values())} célula(s)?"):
+        print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
+        return
+    for col, (new, _match) in plan.items():
+        table[col] = new
+    apply_types()
+    commit()
+    print(f"\n{UI_INDENT_1}Substituição concluída.")
+    pause()
+
+
 # Colunas calculadas (fórmulas)
 FORMULA_HELP = (
     "Operadores: + - * / // % **   comparações: == != < <= > >=   lógica: and or not",
@@ -3074,10 +3456,11 @@ def menu_rows():
         print(f"{UI_INDENT_1}[1] Adicionar linha(s)")
         print(f"{UI_INDENT_1}[2] Editar célula")
         print(f"{UI_INDENT_1}[3] Remover linha")
+        print(f"{UI_INDENT_1}[4] Procurar e substituir")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "0"})
+        choice = ask_option({"1", "2", "3", "4", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3086,6 +3469,8 @@ def menu_rows():
             edit_cell()
         elif choice == "3":
             remove_row()
+        elif choice == "4":
+            find_replace()
 
 
 def menu_columns():
@@ -3098,10 +3483,12 @@ def menu_columns():
         print(f"{UI_INDENT_1}[5] Colunas visíveis (escolher e ordenar)")
         print(f"{UI_INDENT_1}[6] Coluna calculada (fórmula)")
         print(f"{UI_INDENT_1}[7] Converter fórmula em valores")
+        print(f"{UI_INDENT_1}[8] Converter tipo da coluna")
+        print(f"{UI_INDENT_1}[9] Regras de validação")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3118,6 +3505,10 @@ def menu_columns():
             add_formula_column()
         elif choice == "7":
             freeze_formula()
+        elif choice == "8":
+            convert_column_type()
+        elif choice == "9":
+            menu_rules()
 
 
 def menu_basic_analysis():
