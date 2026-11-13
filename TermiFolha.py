@@ -1450,6 +1450,18 @@ def duplicados():
     pausar()
 
 
+def valor_para_coluna(col, valor):
+    """Ajusta um valor calculado (média, mediana) ao tipo da coluna.
+
+    Colunas inteiras não aceitam fracções, por isso o valor é arredondado.
+    """
+    if pd.isna(valor):
+        return valor
+    if pd.api.types.is_integer_dtype(tabela[col]):
+        return round(valor)
+    return valor
+
+
 def dados_em_falta():
     global tabela
     if tabela.empty:
@@ -1506,13 +1518,13 @@ def dados_em_falta():
                 print(f"{UI_INDENTACAO_1}Coluna não numérica.")
                 pausar()
                 return
-            tabela[col] = tabela[col].fillna(tabela[col].mean())
+            tabela[col] = tabela[col].fillna(valor_para_coluna(col, tabela[col].mean()))
         elif sub_op == "3":
             if not pd.api.types.is_numeric_dtype(tabela[col]):
                 print(f"{UI_INDENTACAO_1}Coluna não numérica.")
                 pausar()
                 return
-            tabela[col] = tabela[col].fillna(tabela[col].median())
+            tabela[col] = tabela[col].fillna(valor_para_coluna(col, tabela[col].median()))
         elif sub_op == "4":
             tabela[col] = tabela[col].ffill()
         else:
