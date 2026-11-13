@@ -54,7 +54,7 @@ NOME_APP          = "TermiFolha"
 TITULO_APP        = "TermiFolha  —  Folha de Cálculo CLI"
 VERSAO_APP        = "1.0"
 AUTOR_APP         = "Gabriel Gomes Alves"
-FICHEIRO_ESTADO   = ".termifolha_estado.pkl"
+FICHEIRO_ESTADO   = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".termifolha_estado.pkl")
 EXT_EXCEL         = ".xlsx"
 EXT_WORD          = ".docx"
 EXT_PDF           = ".pdf"
@@ -364,21 +364,32 @@ def guardar_estado():
     try:
         with open(FICHEIRO_ESTADO, "wb") as f:
             pickle.dump((tabela, tipos), f)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"{UI_INDENTACAO_1}Aviso: não foi possível guardar o estado ({e}).")
+        print(f"{UI_INDENTACAO_1}As alterações mantêm-se em memória; exporte para Excel para não as perder.")
 
 
 def carregar_estado():
     global tabela, tipos
+    if not os.path.exists(FICHEIRO_ESTADO):
+        return
     try:
-        if os.path.exists(FICHEIRO_ESTADO):
-            with open(FICHEIRO_ESTADO, "rb") as f:
-                tabela, tipos = pickle.load(f)
-            undo.clear()
-            redo.clear()
-            undo.append((tabela.copy(), tipos.copy()))
-    except Exception:
-        pass
+        with open(FICHEIRO_ESTADO, "rb") as f:
+            tabela, tipos = pickle.load(f)
+    except Exception as e:
+        copia = FICHEIRO_ESTADO + ".corrompido"
+        print(f"{UI_INDENTACAO_1}Aviso: o estado guardado está corrompido ({e}).")
+        try:
+            os.replace(FICHEIRO_ESTADO, copia)
+            print(f"{UI_INDENTACAO_1}O ficheiro foi preservado como '{copia}'. A começar com uma folha vazia.")
+        except OSError as erro_copia:
+            print(f"{UI_INDENTACAO_1}Não foi possível preservar o ficheiro ({erro_copia}).")
+        tabela, tipos = pd.DataFrame(), {}
+        pausar()
+        return
+    undo.clear()
+    redo.clear()
+    undo.append((tabela.copy(), tipos.copy()))
 
 
 def registar_ponto():

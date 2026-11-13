@@ -1,5 +1,6 @@
 # Estado e exportações geradas em tempo de execução
 .termifolha_estado.pkl
+.termifolha_estado.pkl.corrompido
 *.xlsx
 *.docx
 /*.pdf
