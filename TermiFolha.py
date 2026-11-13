@@ -47,6 +47,8 @@ import logging
 import os
 import pickle
 
+import fpdf as fpdf_lib
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -839,9 +841,33 @@ def _latin1(texto):
     return str(texto).encode("latin-1", "replace").decode("latin-1")
 
 
+def _texto_pdf(pdf, texto):
+    """Texto pronto a escrever no PDF: intacto com fonte Unicode, senão reduzido a Latin-1."""
+    return str(texto) if getattr(pdf, "tf_unicode", False) else _latin1(texto)
+
+
+def _configurar_fonte_pdf(pdf):
+    """Devolve o nome da família a usar. Com fpdf2 regista a DejaVu Sans (vem com o matplotlib) para suportar Unicode.
+
+    O fpdf antigo (1.7) escreve ficheiros de cache na pasta da fonte, por isso aí mantém-se Helvetica (Latin-1).
+    """
+    pdf.tf_unicode = False
+    try:
+        if int(str(getattr(fpdf_lib, "FPDF_VERSION", "1")).split(".")[0]) < 2:
+            return "Helvetica"
+        pasta = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+        pdf.add_font("DejaVu", "", os.path.join(pasta, "DejaVuSans.ttf"))
+        pdf.add_font("DejaVu", "B", os.path.join(pasta, "DejaVuSans-Bold.ttf"))
+    except Exception:
+        log.warning("Fonte Unicode indisponível; o PDF usa Helvetica (Latin-1)", exc_info=True)
+        return "Helvetica"
+    pdf.tf_unicode = True
+    return "DejaVu"
+
+
 def _pdf_linha(pdf, altura, texto, align=""):
     """Escreve uma linha e avança. Funciona em fpdf e fpdf2 (evita o `ln=True` deprecado)."""
-    pdf.cell(0, altura, _latin1(texto), align=align)
+    pdf.cell(0, altura, _texto_pdf(pdf, texto), align=align)
     pdf.ln(altura)
 
 
@@ -861,24 +887,25 @@ def exportar_pdf():
 
     try:
         pdf = FPDF()
+        familia = _configurar_fonte_pdf(pdf)
         pdf.add_page()
 
         # Título
-        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_font(familia, "B", 16)
         pdf.set_text_color(16, 41, 230)
-        _pdf_linha(pdf, 10, f"{NOME_APP} - Relatorio", align="C")
+        _pdf_linha(pdf, 10, f"{NOME_APP} - Relatório", align="C")
 
         # Dimensões
-        pdf.set_font("Helvetica", size=11)
+        pdf.set_font(familia, size=11)
         pdf.set_text_color(0, 0, 0)
-        _pdf_linha(pdf, 8, f"Dimensoes: {len(tabela)} linhas x {len(tabela.columns)} colunas")
+        _pdf_linha(pdf, 8, f"Dimensões: {len(tabela)} linhas × {len(tabela.columns)} colunas")
 
         # Colunas e tipos
         pdf.ln(3)
-        pdf.set_font("Helvetica", "B", 12)
+        pdf.set_font(familia, "B", 12)
         pdf.set_text_color(14, 122, 230)
         _pdf_linha(pdf, 8, "Colunas e tipos")
-        pdf.set_font("Helvetica", size=10)
+        pdf.set_font(familia, size=10)
         pdf.set_text_color(0, 0, 0)
         for col in tabela.columns:
             nome_tipo = NOME_TIPO.get(tipo_de(col), "texto")
@@ -887,38 +914,38 @@ def exportar_pdf():
         # Dados
         if not tabela.empty:
             pdf.ln(3)
-            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_font(familia, "B", 12)
             pdf.set_text_color(14, 122, 230)
             _pdf_linha(pdf, 8, "Dados")
             pdf.set_text_color(0, 0, 0)
 
             cols = list(tabela.columns)
             col_w = min(35, (pdf.w - 20) / len(cols))
-            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_font(familia, "B", 8)
             for col in cols:
-                pdf.cell(col_w, 7, _latin1(str(col)[:14]), border=1)
+                pdf.cell(col_w, 7, _texto_pdf(pdf, str(col)[:14]), border=1)
             pdf.ln()
-            pdf.set_font("Helvetica", size=8)
+            pdf.set_font(familia, size=8)
             for _, row in tabela.iterrows():
                 for col in cols:
-                    pdf.cell(col_w, 6, _latin1(str(formatar_valor(row[col]))[:14]), border=1)
+                    pdf.cell(col_w, 6, _texto_pdf(pdf, str(formatar_valor(row[col]))[:14]), border=1)
                 pdf.ln()
 
         # Estatísticas
         num_cols = tabela.select_dtypes(include="number").columns.tolist()
         if num_cols:
             pdf.ln(3)
-            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_font(familia, "B", 12)
             pdf.set_text_color(14, 122, 230)
-            _pdf_linha(pdf, 8, "Estatisticas basicas (colunas numericas)")
-            pdf.set_font("Helvetica", size=10)
+            _pdf_linha(pdf, 8, "Estatísticas básicas (colunas numéricas)")
+            pdf.set_font(familia, size=10)
             pdf.set_text_color(0, 0, 0)
             for col in num_cols:
                 serie = tabela[col].dropna()
                 linha = (
-                    f"{col}: media={formatar_numero(serie.mean())}  "
-                    f"min={formatar_numero(serie.min())}  "
-                    f"max={formatar_numero(serie.max())}  "
+                    f"{col}: média={formatar_numero(serie.mean())}  "
+                    f"mín={formatar_numero(serie.min())}  "
+                    f"máx={formatar_numero(serie.max())}  "
                     f"desvio={formatar_numero(serie.std())}  "
                     f"mediana={formatar_numero(serie.median())}"
                 )
