@@ -43,9 +43,10 @@
 
 import os
 import pickle
-import pandas as pd
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from docx import Document
 from fpdf import FPDF
 
@@ -350,9 +351,9 @@ def aplicar_tipos():
     for col in tabela.columns:
         tipo = tipo_de(col)
         try:
-            if tipo == int:
+            if tipo is int:
                 tabela[col] = pd.to_numeric(tabela[col], errors="coerce").astype("Int64")
-            elif tipo == float:
+            elif tipo is float:
                 tabela[col] = pd.to_numeric(tabela[col], errors="coerce")
             elif tipo == TIPO_DATA:
                 tabela[col] = pd.to_datetime(tabela[col], errors="coerce")
@@ -546,6 +547,17 @@ def exportar_word():
     pausar()
 
 
+def _latin1(texto):
+    """Fontes core do PDF só suportam Latin-1: o resto é substituído por '?'."""
+    return str(texto).encode("latin-1", "replace").decode("latin-1")
+
+
+def _pdf_linha(pdf, altura, texto, align=""):
+    """Escreve uma linha e avança. Funciona em fpdf e fpdf2 (evita o `ln=True` deprecado)."""
+    pdf.cell(0, altura, _latin1(texto), align=align)
+    pdf.ln(altura)
+
+
 def exportar_pdf():
     if tabela.columns.empty:
         print(f"{UI_INDENTACAO_1}Sem dados para exportar.")
@@ -565,54 +577,54 @@ def exportar_pdf():
         pdf.add_page()
 
         # Título
-        pdf.set_font("Arial", "B", 16)
+        pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(16, 41, 230)
-        pdf.cell(0, 10, f"{NOME_APP} - Relatorio", ln=True, align="C")
+        _pdf_linha(pdf, 10, f"{NOME_APP} - Relatorio", align="C")
 
         # Dimensões
-        pdf.set_font("Arial", size=11)
+        pdf.set_font("Helvetica", size=11)
         pdf.set_text_color(0, 0, 0)
-        pdf.cell(0, 8, f"Dimensoes: {len(tabela)} linhas x {len(tabela.columns)} colunas", ln=True)
+        _pdf_linha(pdf, 8, f"Dimensoes: {len(tabela)} linhas x {len(tabela.columns)} colunas")
 
         # Colunas e tipos
         pdf.ln(3)
-        pdf.set_font("Arial", "B", 12)
+        pdf.set_font("Helvetica", "B", 12)
         pdf.set_text_color(14, 122, 230)
-        pdf.cell(0, 8, "Colunas e tipos", ln=True)
-        pdf.set_font("Arial", size=10)
+        _pdf_linha(pdf, 8, "Colunas e tipos")
+        pdf.set_font("Helvetica", size=10)
         pdf.set_text_color(0, 0, 0)
         for col in tabela.columns:
             nome_tipo = NOME_TIPO.get(tipo_de(col), "texto")
-            pdf.cell(0, 7, f"  {col}: {nome_tipo}", ln=True)
+            _pdf_linha(pdf, 7, f"  {col}: {nome_tipo}")
 
         # Dados
         if not tabela.empty:
             pdf.ln(3)
-            pdf.set_font("Arial", "B", 12)
+            pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(14, 122, 230)
-            pdf.cell(0, 8, "Dados", ln=True)
+            _pdf_linha(pdf, 8, "Dados")
             pdf.set_text_color(0, 0, 0)
 
             cols = list(tabela.columns)
             col_w = min(35, (pdf.w - 20) / len(cols))
-            pdf.set_font("Arial", "B", 8)
+            pdf.set_font("Helvetica", "B", 8)
             for col in cols:
-                pdf.cell(col_w, 7, str(col)[:14], border=1)
+                pdf.cell(col_w, 7, _latin1(str(col)[:14]), border=1)
             pdf.ln()
-            pdf.set_font("Arial", size=8)
+            pdf.set_font("Helvetica", size=8)
             for _, row in tabela.iterrows():
                 for col in cols:
-                    pdf.cell(col_w, 6, str(formatar_valor(row[col]))[:14], border=1)
+                    pdf.cell(col_w, 6, _latin1(str(formatar_valor(row[col]))[:14]), border=1)
                 pdf.ln()
 
         # Estatísticas
         num_cols = tabela.select_dtypes(include="number").columns.tolist()
         if num_cols:
             pdf.ln(3)
-            pdf.set_font("Arial", "B", 12)
+            pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(14, 122, 230)
-            pdf.cell(0, 8, "Estatisticas basicas (colunas numericas)", ln=True)
-            pdf.set_font("Arial", size=10)
+            _pdf_linha(pdf, 8, "Estatisticas basicas (colunas numericas)")
+            pdf.set_font("Helvetica", size=10)
             pdf.set_text_color(0, 0, 0)
             for col in num_cols:
                 serie = tabela[col].dropna()
@@ -623,7 +635,7 @@ def exportar_pdf():
                     f"desvio={formatar_numero(serie.std())}  "
                     f"mediana={formatar_numero(serie.median())}"
                 )
-                pdf.cell(0, 7, linha, ln=True)
+                _pdf_linha(pdf, 7, linha)
 
         pdf.output(nome)
         print(f"\n{UI_INDENTACAO_1}Exportado para '{nome}'.")
@@ -1032,7 +1044,7 @@ def ordenar():
     guardar_estado()
     registar_ponto()
 
-    descr = ", ".join(f"{c} ({'asc' if a else 'desc'})" for c, a in zip(cols_ord, asc_ord))
+    descr = ", ".join(f"{c} ({'asc' if a else 'desc'})" for c, a in zip(cols_ord, asc_ord, strict=True))
     print(f"\n{UI_INDENTACAO_1}Ordenado por: {descr}")
     pausar()
 
@@ -1885,7 +1897,7 @@ def gerar_circular_eixos():
         return
 
     plt.figure()
-    plt.pie(resultado.values, labels=[str(l) for l in resultado.index], autopct="%1.1f%%", startangle=90)
+    plt.pie(resultado.values, labels=[str(rotulo) for rotulo in resultado.index], autopct="%1.1f%%", startangle=90)
     plt.title(f"Circular: {col_val} por {col_labels} ({agg})")
     plt.tight_layout()
     plt.show()

@@ -1,0 +1,8 @@
+# Dependências de execução do TermiFolha.
+# Versões com que foi testado: Python 3.13, pandas 3.0, numpy 2.4, matplotlib 3.10, openpyxl 3.1, python-docx 1.2.
+pandas
+numpy
+matplotlib>=3.9  # o código usa boxplot(tick_labels=...)
+openpyxl
+python-docx
+fpdf2
