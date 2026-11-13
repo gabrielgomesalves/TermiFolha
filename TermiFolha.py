@@ -862,6 +862,9 @@ def remover_linha():
         pausar()
         return
 
+    print()
+    desenhar_tabela_dados(tabela.loc[[idx]])
+    print()
     if not confirmar(f"Confirma remover linha {idx}?"):
         print(f"\n{UI_INDENTACAO_1}Operação cancelada.")
         pausar()
@@ -1190,11 +1193,17 @@ def amostra():
 
     cabecalho("AMOSTRA ALEATÓRIA")
     print()
-    n_input = input(f"{UI_INDENTACAO_1}Tamanho (1-{len(tabela)}, Enter = 5): ").strip()
+    n_input = input(f"{UI_INDENTACAO_1}Tamanho: nº de linhas (1-{len(tabela)}) ou percentagem, ex. 20% (Enter = 5): ").strip()
     try:
-        n = int(n_input) if n_input else 5
-        if n <= 0 or n > len(tabela):
-            raise ValueError
+        if n_input.endswith("%"):
+            pct = float(n_input[:-1])
+            if pct <= 0 or pct > 100:
+                raise ValueError
+            n = max(1, round(len(tabela) * pct / 100))
+        else:
+            n = int(n_input) if n_input else 5
+            if n <= 0 or n > len(tabela):
+                raise ValueError
     except ValueError:
         n = min(5, len(tabela))
 
