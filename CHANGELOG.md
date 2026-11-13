@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.2.0]
+
+### Adicionado
+- **Várias folhas (separadores)** num livro: mudar, adicionar, renomear, eliminar, duplicar; **juntar** (join: interna, esquerda, direita, completa) e **empilhar** (concatenar) criam folha nova e preservam os tipos. O Excel com várias folhas importa todas e pode exportá-las todas.
+- **Colunas calculadas por fórmula** (`Preco * Qtd`, `se(Idade >= 18, 1, 0)`, `year(Admissao)`…), recalculadas automaticamente. Avaliador próprio sobre a árvore sintáctica (nunca `eval`/`exec`).
+- **Procurar e substituir** (literal, com pré-visualização, respeita as regras), **converter tipo de coluna** (reporta o que não converte; não arredonda inteiros em silêncio) e **regras de validação** por coluna (mínimo/máximo, permitidos, obrigatório).
+- Apresentação: **formatação de valores** (casas decimais, milhares, `€`), **colunas visíveis** (escolher e ordenar), **ver por páginas**, **linha de totais**; o ecrã principal mostra no máximo 30 linhas.
+- Análise: **correlação** (Pearson e Spearman, matriz), **valores anómalos** (IQR e desvio-padrão), **normalizar** (min-máx, z-score), **faixas** (limites à escolha, largura igual, quantis) e **tabela dinâmica**.
+- **Gráficos em PNG**: os 10 gráficos podem ser gravados em ficheiro em vez de abrirem uma janela.
+- **JSON** (importar/exportar), **colar dados** do Excel ou de CSV, exportar **Markdown** e **HTML**, e **ficheiros de projecto** `.termifolha` com todas as folhas.
+- **Modo de linha de comandos** (`--importar`, `--projecto`, `--exportar`, `--csv-pt`, `--todas-as-folhas`) sem perguntas e sem tocar no estado da sessão; códigos de saída 0/1/2.
+- Menu **Definições**: passos de desfazer (1–100) e linhas por página.
+- Datas `AAAA-MM-DD` reconhecidas na importação de CSV/JSON/texto colado.
+- Mais de 380 novos testes (471 no total), incluindo um que garante que cada opção de cada menu chama a função certa.
+
+### Alterado
+- O histórico de desfazer guarda o **livro inteiro** e passa de 3 para **20 passos** por omissão (a v1.1 guardava 4 estados, ou seja, 3 passos).
+- O estado em JSON passa à **versão 2** (várias folhas e metadados). A versão 1 continua a ser lida; **a v1.1 não consegue ler a versão 2**.
+- *Limpar folha* só esvazia a folha activa quando há várias.
+- `export_word`/`export_pdf`/`export_csv` passam a usar funções `write_*` reutilizáveis (também usadas pela linha de comandos).
+- Versão 1.2.
+
 ## [1.1.0]
 
 ### Adicionado

@@ -1,8 +1,8 @@
 # TermiFolha
 
-Folha de cálculo em linha de comando, em Python, num único ficheiro (`TermiFolha.py`). Cria, edita, filtra e analisa tabelas com colunas tipadas (texto, inteiro, decimal, data), desenha gráficos e importa/exporta Excel e CSV, e exporta Word e PDF. O estado é gravado automaticamente entre sessões.
+Folha de cálculo em linha de comando, em Python, num único ficheiro (`TermiFolha.py`). Cria, edita, filtra e analisa tabelas com colunas tipadas (texto, inteiro, decimal, data), com **várias folhas**, **colunas calculadas por fórmula**, regras de validação, tabelas dinâmicas e gráficos. Importa e exporta Excel, CSV e JSON, e exporta Word, PDF, Markdown e HTML. O estado é gravado automaticamente entre sessões.
 
-Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.1 · Manual: [`docs/MANUAL.md`](docs/MANUAL.md)
+Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.2 · Manual: [`docs/MANUAL.md`](docs/MANUAL.md)
 
 ## Instalação
 
@@ -21,11 +21,20 @@ Navegue pelos menus com o número ou a letra da opção; `sair` cancela uma oper
 
 Exemplo: `[1] Folha` → `[6] Folha dummy` cria dados de exemplo; depois `[5] Estatísticas` → `[2]` → `Salario` mostra média, soma, mínimo, máximo e mediana.
 
-O estado fica em `.termifolha_estado.json` e os erros em `.termifolha.log`, ambos na pasta do programa.
+O estado (todas as folhas) fica em `.termifolha_estado.json` e os erros em `.termifolha.log`, ambos na pasta do programa.
+
+### Sem menus (scripts)
+
+```
+python TermiFolha.py --importar vendas.csv --exportar vendas.xlsx --exportar relatorio.html
+python TermiFolha.py --projecto projecto.termifolha --exportar livro.xlsx --todas-as-folhas
+```
+
+Neste modo não há perguntas, o estado da sessão não é lido nem gravado e o código de saída é `0` (sucesso), `1` (erro) ou `2` (formato não suportado). Formatos de exportação: `.xlsx .csv .json .md .html .docx .pdf`. Ver o manual, secção 12.
 
 ### Ficheiros gerados e actualização da v1.0
 
-A v1.0 guardava o estado em `.termifolha_estado.pkl`. Ao arrancar, a v1.1 migra-o automaticamente (com uma leitura restrita que só aceita DataFrames) e guarda uma cópia como `.pkl.migrado`.
+A v1.0 guardava o estado em `.termifolha_estado.pkl`. Ao arrancar, a versão actual migra-o automaticamente (com uma leitura restrita que só aceita DataFrames) e guarda uma cópia como `.pkl.migrado`. O estado da v1.1 é lido e convertido; **depois de gravar com a v1.2, a v1.1 já não o lê**.
 
 ## Desenvolvimento
 
@@ -40,7 +49,7 @@ conda create -p .venv python=3.15 -y        # ou: python -m venv .venv
 Testes e lint:
 
 ```
-.venv\python.exe -m pytest          # 90 testes
+.venv\python.exe -m pytest          # 471 testes
 .venv\python.exe -m ruff check .    # lint
 ```
 
@@ -63,5 +72,6 @@ O código está em inglês (funções, variáveis, constantes); mensagens, comen
 - O manual em PDF da v1.0 está desactualizado; o de referência é `docs/MANUAL.md`.
 - A tabela do PDF trunca as células a 14 caracteres.
 - Com o `fpdf` antigo, caracteres fora de Latin-1 aparecem como `?` no PDF.
-- O histórico de desfazer tem 4 passos.
+- O histórico de desfazer guarda o livro inteiro: 20 passos por omissão (configurável até 100); cada passo usa memória.
+- As fórmulas são por coluna (vectoriais); não há referências a células (`A1`).
 - Os nomes das funções de teste estão em português (descrevem o comportamento esperado).

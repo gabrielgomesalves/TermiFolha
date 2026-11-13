@@ -7,6 +7,8 @@
 .termifolha.log*
 .termifolha_estado.json.corrompido
 *.xlsx
+graficos/
+*.termifolha
 *.docx
 /*.pdf
 !Manual do Utilizador*.pdf

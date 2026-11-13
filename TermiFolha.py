@@ -13,20 +13,22 @@
 # TermiFolha — Folha de Cálculo CLI
 #
 # Autor: Gabriel Gomes Alves
-# Versão: 1.1
+# Versão: 1.2
 #
 # Descrição: TermiFolha é uma aplicação de folha de cálculo em linha de comando, permite criar, editar, filtrar e analisar dados de uma folha de cálculo (DataFrame) de forma simples e eficiente.
 #
 # Funcionalidades:
+# - Várias folhas (separadores); juntar, empilhar e tabela dinâmica
 # - Criar nova folha de cálculo com colunas personalizadas
-# - Adicionar, editar e remover linhas e colunas
-# - Ordenar dados por múltiplas colunas
-# - Filtrar dados com critérios avançados
-# - Estatísticas descritivas e análise de dados
-# - Visualizações simples (histogramas, gráficos de linha, heatmaps)
+# - Adicionar, editar e remover linhas e colunas; procurar e substituir
+# - Colunas calculadas por fórmula (recalculadas automaticamente), regras de validação, conversão de tipos
+# - Ordenar dados por múltiplas colunas; filtrar com critérios avançados; ver por páginas
+# - Estatísticas descritivas, correlação, outliers, normalização e faixas
+# - Visualizações (histogramas, linhas, heatmaps, ...) no ecrã ou gravadas em PNG
 # - Suporte a tipos de dados: texto, inteiro, decimal e data
-# - Importar e exportar Excel e CSV; exportar Word e PDF
-# - Undo/Redo e guardar automático do estado (JSON)
+# - Importar Excel, CSV, JSON e texto colado; exportar Excel, CSV, JSON, Markdown, HTML, Word e PDF
+# - Projectos (.termifolha), Undo/Redo configurável e guardar automático do estado (JSON)
+# - Modo de linha de comandos (--importar / --exportar) sem menus
 #
 # Requisitos: Python 3.12+, numpy, pandas, matplotlib, openpyxl, python-docx, fpdf2 (ver requirements.txt)
 #
@@ -40,7 +42,7 @@
 #
 # (ASCII art gerado por https://patorjk.com/software/taag/#p=display&f=DOS+Rebel&t=TermiFolha&x=none&v=4&h=4&w=80&we=false)
 #
-# 20-05-2026
+# 13-11-2026
 
 import argparse
 import ast
@@ -279,7 +281,7 @@ def draw_table():
         print(f"{UI_INDENT_1}({len(table.columns) - len(view.columns)} coluna(s) oculta(s); Colunas → Colunas visíveis)")
 
 
-def header(subtitle="MENU PRINCIPAL"):
+def header(subtitle="MENU PRINCIPAL", show_table=True):
     clear_screen()
     print("=" * WIDTH)
     print(APP_TITLE.center(WIDTH))
@@ -293,8 +295,9 @@ def header(subtitle="MENU PRINCIPAL"):
         state_text += f"  |  folha '{active_name}' ({names.index(active_name) + 1}/{len(names)})"
     print(f"{UI_INDENT_1}Estado: {state_text}")
     print("-" * WIDTH)
-    print()
-    draw_table()
+    if show_table:
+        print()
+        draw_table()
     print()
     print("=" * WIDTH)
     print(subtitle.center(WIDTH))
@@ -4335,7 +4338,7 @@ def view_pages():
     while True:
         start, end, pages = page_bounds(len(view), size, page)
         page = start // size
-        header(f"PÁGINA {page + 1}/{pages}  (linhas {start}-{end - 1} de {len(view)})")
+        header(f"PÁGINA {page + 1}/{pages}  (linhas {start}-{end - 1} de {len(view)})", show_table=False)
         print()
         draw_data_table(view.iloc[start:end], totals_row(list(view.columns)) if page == pages - 1 else None)
         print()
@@ -4583,15 +4586,17 @@ def about():
     print(f"{UI_INDENT_1}Licença  : MIT License")
     print()
     print(f"{UI_INDENT_1}Funcionalidades:")
-    print(f"{UI_INDENT_2}- Criar, editar, filtrar e analisar dados")
-    print(f"{UI_INDENT_2}- Tipos: texto, inteiro, decimal, data")
-    print(f"{UI_INDENT_2}- Estatísticas e análise avançada (groupby, duplicados)")
-    print(f"{UI_INDENT_2}- Gráficos: barras, linhas, circular, dispersão, área,")
-    print(f"{UI_INDENT_2}  histograma, boxplot, heatmap, tendência polinomial")
-    print(f"{UI_INDENT_2}- Importar / Exportar Excel e CSV; exportar Word e PDF")
-    print(f"{UI_INDENT_2}- Undo / Redo e gravação automática de estado")
+    print(f"{UI_INDENT_2}- Várias folhas; juntar, empilhar e tabela dinâmica")
+    print(f"{UI_INDENT_2}- Tipos: texto, inteiro, decimal, data; conversão e regras de validação")
+    print(f"{UI_INDENT_2}- Colunas calculadas por fórmula, recalculadas automaticamente")
+    print(f"{UI_INDENT_2}- Estatísticas, correlação, outliers e análise avançada")
+    print(f"{UI_INDENT_2}- Gráficos no ecrã ou gravados em PNG")
+    print(f"{UI_INDENT_2}- Importar: Excel, CSV, JSON, dados colados")
+    print(f"{UI_INDENT_2}- Exportar: Excel, CSV, JSON, Markdown, HTML, Word, PDF")
+    print(f"{UI_INDENT_2}- Projectos, Undo / Redo e gravação automática de estado")
+    print(f"{UI_INDENT_2}- Linha de comandos: --importar / --exportar (ver --help)")
     print()
-    print(f"{UI_INDENT_1}Requisitos: Python 3.x · pandas · numpy · matplotlib · python-docx · fpdf2")
+    print(f"{UI_INDENT_1}Requisitos: Python 3.12+ · pandas · numpy · matplotlib · openpyxl · python-docx · fpdf2")
     print("-" * WIDTH)
     pause()
 
