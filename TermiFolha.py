@@ -867,8 +867,7 @@ def remover_linha():
         pausar()
         return
 
-    tabela.drop(index=idx, inplace=True)
-    tabela.reset_index(drop=True, inplace=True)
+    tabela = tabela.drop(index=idx).reset_index(drop=True)
     guardar_estado()
     registar_ponto()
     print(f"\n{UI_INDENTACAO_1}Linha {idx} removida.")
@@ -955,7 +954,7 @@ def remover_coluna():
         pausar()
         return
 
-    tabela.drop(columns=[nome], inplace=True)
+    tabela = tabela.drop(columns=[nome])
     tipos.pop(nome, None)
     guardar_estado()
     registar_ponto()
@@ -993,7 +992,7 @@ def renomear_coluna():
         else:
             break
 
-    tabela.rename(columns={nome: novo_nome}, inplace=True)
+    tabela = tabela.rename(columns={nome: novo_nome})
     if nome in tipos:
         tipos[novo_nome] = tipos.pop(nome)
     guardar_estado()
@@ -1040,7 +1039,7 @@ def ordenar():
         cols_ord.append(col)
         asc_ord.append(direccao != "D")
 
-    tabela.sort_values(by=cols_ord, ascending=asc_ord, inplace=True, ignore_index=True)
+    tabela = tabela.sort_values(by=cols_ord, ascending=asc_ord, ignore_index=True)
     guardar_estado()
     registar_ponto()
 
@@ -1572,8 +1571,7 @@ def dados_em_falta():
         if not confirmar(f"Remover linhas com qualquer missing ({int(contagens.sum())} células)?"):
             return
         n_antes = len(tabela)
-        tabela.dropna(inplace=True)
-        tabela.reset_index(drop=True, inplace=True)
+        tabela = tabela.dropna().reset_index(drop=True)
         guardar_estado()
         registar_ponto()
         print(f"\n{UI_INDENTACAO_1}{n_antes - len(tabela)} linha(s) removida(s).")

@@ -1,6 +1,8 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+# Depreciações passam a falhar os testes, para apanhar quebras futuras cedo.
+filterwarnings = ["error::DeprecationWarning"]
 
 [tool.ruff]
 line-length = 200
