@@ -58,6 +58,7 @@ import pickle
 import re
 import sys
 import time
+from typing import NamedTuple
 
 import fpdf as fpdf_lib
 import matplotlib
@@ -782,6 +783,8 @@ def sheet_name_error(name, existing=None):
         return f"o nome tem mais de {_SHEET_NAME_MAX} caracteres"
     if any(c in _SHEET_NAME_FORBIDDEN for c in name):
         return "o nome não pode conter [ ] : * ? / \\"
+    if "'" in name and '"' in name:
+        return "o nome não pode ter aspas simples e duplas ao mesmo tempo (as fórmulas não o conseguiriam referir)"
     if any(n.lower() == name.lower() for n in existing):
         return "já existe uma folha com esse nome"
     return None
@@ -833,6 +836,8 @@ def rename_sheet(old, new):
     sheets = {(new if n == old else n): v for n, v in sheets.items()}
     if old == active_name:
         active_name = new
+    for sheet in current_book().values():  # as fórmulas de outras folhas que a referiam passam a usar o novo nome
+        sheet["meta"]["formulas"] = {c: rename_sheet_in_formula(e, old, new) for c, e in sheet["meta"]["formulas"].items()}
 
 
 def delete_sheet(name):
@@ -840,6 +845,9 @@ def delete_sheet(name):
     names = sheet_names()
     if len(names) <= 1:
         raise ValueError("o livro tem de ter pelo menos uma folha")
+    users = sheet_formula_users(name)
+    if users:
+        raise ValueError(f"a folha '{name}' é usada pelas fórmulas de: {', '.join(users)}. Converta essas colunas em valores primeiro")
     if name == active_name:
         position = names.index(name)
         switch_sheet(names[position + 1] if position + 1 < len(names) else names[position - 1])
@@ -1863,17 +1871,21 @@ _FORMULA_AGGREGATES = {"soma": "sum", "sum": "sum", "media": "mean", "average": 
 _FORMULA_ARITY = {  # nome -> (mínimo, máximo) de argumentos
     "abs": (1, 1), "round": (1, 2), "sqrt": (1, 1), "log": (1, 1), "exp": (1, 1), "floor": (1, 1), "ceil": (1, 1),
     "min": (1, 2), "max": (1, 2), "se": (3, 3), "year": (1, 1), "month": (1, 1), "day": (1, 1), "days": (2, 2),
+    "anterior": (1, 2), "seguinte": (1, 2), "desloca": (2, 2),
     **dict.fromkeys(_FORMULA_AGGREGATES, (1, 1)),
 }
 _FORMULA_FLOAT_FUNCTIONS = {"sqrt", "log", "exp", "media", "average", "avg"}  # produzem sempre decimais
 
 # Referências a células: coluna por letra (A = 1.ª coluna) ou por nome entre parênteses rectos, mais o nº da linha como no ecrã (#, a começar em 0).
 # `B2` é uma célula, `B2:B9` um intervalo (só dentro de soma/media/contar/min/max). São sempre fixas; o `$` é aceite e ignorado.
+# Para acompanhar a linha usam-se anterior(x), seguinte(x) e desloca(x, n). Noutra folha: `Vendas!B2`, `'Vendas 2025'!B2:B9`,
+# `Vendas![Preço]3` e, só dentro de soma/media/contar/min/max, a coluna inteira `Vendas![Preço]`.
 _CELL_PATTERN = r"\$?[A-Za-z]{1,3}\$?\d+"
 _BRACKET_CELL_PATTERN = r"\[[^\[\]]+\]\$?\d+"
 _REF_PATTERN = rf"(?:{_BRACKET_CELL_PATTERN}|{_CELL_PATTERN})"
 _FORMULA_TOKEN = re.compile(
-    r"""(?P<text>'[^']*'|"[^"]*")"""  # texto entre aspas: fica como está
+    rf"""(?P<xref>(?P<xsheet>'[^']+'|"[^"]+"|(?<![\w.])[^\W\d]\w*)!(?!=)(?P<xbody>{_REF_PATTERN}(?:\s*:\s*{_REF_PATTERN})?(?![\w(\[.])|\[[^\[\]]+\]))"""  # folha!referência
+    r"""|(?P<text>'[^']*'|"[^"]*")"""  # texto entre aspas: fica como está
     rf"""|(?P<ref>(?<![\w.]){_REF_PATTERN}(?:\s*:\s*{_REF_PATTERN})?(?![\w(\[.]))"""
     r"""|(?P<column>\[[^\[\]]+\])"""
 )
@@ -1912,9 +1924,62 @@ def _is_column_name(token, columns):
     return ":" not in token and not token.startswith("[") and resolve_column(token, source=columns) is not None
 
 
-def canonical_formula(expression, columns):
-    """Troca as referências por letra (`B2`) por referências por nome (`[Salario]2`), que não mudam se as colunas mudarem de posição."""
+def current_book():
+    """O livro como {nome da folha: {"table", "types", "meta"}}; a folha activa aponta para as variáveis vivas."""
+    return {name: get_sheet(name) for name in sheet_names()}
+
+
+def _quote_sheet(name):
+    """Nome de folha entre aspas, como se escreve nas fórmulas (`'Vendas 2025'`)."""
+    return f'"{name}"' if "'" in name else f"'{name}'"
+
+
+def _unquote_sheet(token):
+    return token[1:-1] if token[0] in "'\"" else token
+
+
+def _book_sheet(book, name):
+    """(nome certo, folha) da folha `name` (sem distinguir maiúsculas). Levanta FormulaError se não existir."""
+    for real, sheet in book.items():
+        if real.lower() == name.lower():
+            return real, sheet
+    raise FormulaError(f"folha inexistente: '{name}'")
+
+
+def _is_whole_column(body):
+    return re.fullmatch(r"\[[^\[\]]+\]", body) is not None
+
+
+def canonical_formula(expression, columns, book=None):
+    """Troca as referências por letra (`B2`) por referências por nome (`[Salario]2`), que não mudam se as colunas mudarem de posição.
+
+    As referências a outras folhas passam a `'Folha'![Coluna]2`, com o nome da folha sempre entre aspas.
+    """
+    book = current_book() if book is None else book
+
+    def other_sheet(match):
+        sheet_name, sheet = _book_sheet(book, _unquote_sheet(match["xsheet"]))
+        other = list(sheet["table"].columns)
+        body = match["xbody"]
+        if _is_whole_column(body):
+            name = body[1:-1].strip()
+            column = resolve_column(name, source=other)
+            if column is None:
+                raise FormulaError(f"coluna inexistente em '{sheet_name}': [{name}]")
+            used, parts = [column], [f"[{column}]"]
+        else:
+            used, parts = [], []
+            for part in re.findall(_REF_PATTERN, body):
+                column, row = _cell_endpoint(part, other)
+                used.append(column)
+                parts.append(f"[{column}]{row}")
+        if any("[" in c or "]" in c for c in used):
+            raise FormulaError("há uma coluna com parênteses rectos no nome que não pode ser referida")
+        return f"{_quote_sheet(sheet_name)}!" + ":".join(parts)
+
     def replace(match):
+        if match["xref"] is not None:
+            return other_sheet(match)
         token = match["ref"]
         if token is None or _is_column_name(token, columns):
             return match.group(0)
@@ -1929,8 +1994,28 @@ def canonical_formula(expression, columns):
     return _FORMULA_TOKEN.sub(replace, expression.strip())
 
 
-def _parse_formula(expression, columns):
-    """Valida `expression` e devolve (árvore, {nome no texto: coluna}, colunas referidas, {nome no texto: extremos da célula/intervalo}). Levanta FormulaError."""
+def rename_sheet_in_formula(expression, old, new):
+    """Troca o nome de uma folha nas referências de uma fórmula (`'Velha'!B2` -> `'Nova'!B2`)."""
+    def replace(match):
+        if match["xref"] is not None and _unquote_sheet(match["xsheet"]).lower() == old.lower():
+            return f"{_quote_sheet(new)}!{match['xbody']}"
+        return match.group(0)
+
+    return _FORMULA_TOKEN.sub(replace, expression)
+
+
+class _ParsedFormula(NamedTuple):
+    tree: ast.Expression
+    names: dict  # nome no texto -> coluna da folha da fórmula
+    referenced: set  # colunas da própria folha de que a fórmula depende
+    refs: dict  # nome no texto -> (folha ou None, extremos da célula/intervalo)
+    xcols: dict  # nome no texto -> (folha, coluna inteira de outra folha)
+    external: set  # (folha, coluna) de outras folhas de que a fórmula depende
+
+
+def _parse_formula(expression, columns, book=None):
+    """Valida `expression` e devolve um _ParsedFormula. Levanta FormulaError."""
+    book = current_book() if book is None else book
     text = expression.strip()
     if not text:
         raise FormulaError("a fórmula está vazia")
@@ -1939,10 +2024,26 @@ def _parse_formula(expression, columns):
 
     names = {}
     refs = {}
+    xcols = {}
 
-    def replace(match):  # [Nome com espaços] e referências a células -> identificadores seguros
+    def replace(match):  # [Nome com espaços], referências a células e a outras folhas -> identificadores seguros
         if match["text"] is not None:
             return match["text"]
+        if match["xref"] is not None:
+            sheet_name, sheet = _book_sheet(book, _unquote_sheet(match["xsheet"]))
+            other = list(sheet["table"].columns)
+            body = match["xbody"]
+            if _is_whole_column(body):
+                name = body[1:-1].strip()
+                column = resolve_column(name, source=other)
+                if column is None:
+                    raise FormulaError(f"coluna inexistente em '{sheet_name}': [{name}]")
+                key = f"__xcol{len(xcols)}__"
+                xcols[key] = (sheet_name, column)
+                return key
+            key = f"__ref{len(refs)}__"
+            refs[key] = (sheet_name, tuple(_cell_endpoint(part, other) for part in re.findall(_REF_PATTERN, body)))
+            return key
         if match["column"] is not None:
             name = match["column"][1:-1].strip()
             column = resolve_column(name, source=columns)
@@ -1955,7 +2056,7 @@ def _parse_formula(expression, columns):
         if _is_column_name(token, columns):
             return token
         key = f"__ref{len(refs)}__"
-        refs[key] = tuple(_cell_endpoint(part, columns) for part in re.findall(_REF_PATTERN, token))
+        refs[key] = (None, tuple(_cell_endpoint(part, columns) for part in re.findall(_REF_PATTERN, token)))
         return key
 
     text = _FORMULA_TOKEN.sub(replace, text)
@@ -1986,8 +2087,11 @@ def _parse_formula(expression, columns):
             low, high = _FORMULA_ARITY[func.id.lower()]
             if not low <= len(node.args) <= high:
                 raise FormulaError(f"'{func.id}' espera entre {low} e {high} argumento(s)")
+        elif isinstance(node, ast.Name) and node.id in xcols:
+            if id(node) not in aggregate_args:
+                raise FormulaError("uma coluna de outra folha só pode ser usada dentro de soma, media, contar, min ou max")
         elif isinstance(node, ast.Name) and node.id in refs:
-            if len(refs[node.id]) > 1 and id(node) not in aggregate_args:
+            if len(refs[node.id][1]) > 1 and id(node) not in aggregate_args:
                 raise FormulaError("um intervalo só pode ser usado dentro de soma, media, contar, min ou max")
         elif isinstance(node, ast.Name) and id(node) not in call_names and node.id not in names:
             column = resolve_column(node.id, source=columns)
@@ -1995,12 +2099,21 @@ def _parse_formula(expression, columns):
                 raise FormulaError(f"coluna ou função desconhecida: '{node.id}'")
             names[node.id] = column
     referenced = {names[n.id] for n in nodes if isinstance(n, ast.Name) and id(n) not in call_names and n.id in names}
-    referenced |= {column for ends in refs.values() for column, _ in ends}
-    for ends in refs.values():
+    external = set(xcols.values())
+    for sheet_name, ends in refs.values():
+        if sheet_name is None:
+            referenced |= {column for column, _ in ends}
+        else:
+            external |= {(sheet_name, column) for column, _ in ends}
         if len(ends) > 1:  # um intervalo abrange todas as colunas entre os extremos
-            positions = sorted(list(columns).index(column) for column, _ in ends)
-            referenced |= set(list(columns)[positions[0]:positions[-1] + 1])
-    return tree, names, referenced, refs
+            all_columns = list(columns) if sheet_name is None else list(book[sheet_name]["table"].columns)
+            positions = sorted(all_columns.index(column) for column, _ in ends)
+            span = set(all_columns[positions[0]:positions[-1] + 1])
+            if sheet_name is None:
+                referenced |= span
+            else:
+                external |= {(sheet_name, column) for column in span}
+    return _ParsedFormula(tree, names, referenced, refs, xcols, external)
 
 
 def _formula_operand(data, col, types):
@@ -2013,12 +2126,18 @@ def _formula_operand(data, col, types):
     return data[col].astype(object)
 
 
-def _formula_reference(ends, data, types):
-    """Valor de uma célula (escalar) ou de um intervalo (Series só com os valores) da folha. Levanta FormulaError se a linha não existir."""
+def _formula_reference(sheet_name, ends, data, types, book):
+    """Valor de uma célula (escalar) ou de um intervalo (Series só com os valores), na folha da fórmula ou em `sheet_name`.
+
+    Levanta FormulaError se a linha não existir.
+    """
+    if sheet_name is not None:
+        data, types = book[sheet_name]["table"], book[sheet_name]["types"]
+    where = "" if sheet_name is None else f" da folha '{sheet_name}'"
     columns = list(data.columns)
     low, high = sorted(row for _, row in (ends[0], ends[-1]))
     if high >= len(data):
-        raise FormulaError(f"a linha {high} não existe (linhas 0 a {len(data) - 1})" if len(data) else "a folha não tem linhas")
+        raise FormulaError(f"a linha {high} não existe{where} (linhas 0 a {len(data) - 1})" if len(data) else f"a folha{where} não tem linhas")
     if len(ends) == 1:
         return _formula_operand(data, ends[0][0], types).iloc[low]
     first, last = sorted(columns.index(column) for column, _ in ends)
@@ -2041,6 +2160,18 @@ def _formula_aggregate(function, value):
     return np.float64(getattr(numbers, function)()) if len(numbers) or function == "sum" else np.float64("nan")
 
 
+_FORMULA_MAX_STEPS = 1_000_000
+
+
+def _formula_steps(name, args):
+    """Nº de linhas a andar em anterior/seguinte/desloca (positivo = linhas seguintes). Tem de ser um inteiro fixo."""
+    amount = args[1] if len(args) > 1 else 1
+    if isinstance(amount, (pd.Series, str)) or not np.isfinite(amount) or float(amount) != int(amount) or abs(int(amount)) > _FORMULA_MAX_STEPS:
+        raise FormulaError(f"o número de linhas de '{name}' tem de ser um inteiro fixo (por exemplo {name}(Salario, 2))")
+    steps = int(amount)
+    return -steps if name == "anterior" else steps
+
+
 def _formula_function(name, args, index):
     """Aplica a função `name` (já validada) a `args`; devolve Series/escalar."""
     def as_series(value):
@@ -2050,6 +2181,8 @@ def _formula_function(name, args, index):
         return _formula_aggregate(_FORMULA_AGGREGATES[name], args[0])
     if name in ("min", "max") and len(args) == 1:
         return _formula_aggregate(name, args[0])
+    if name in ("anterior", "seguinte", "desloca"):
+        return as_series(args[0]).shift(-_formula_steps(name, args))
     if name == "round":
         decimals = int(args[1]) if len(args) > 1 else 0
         return as_series(args[0]).round(decimals)
@@ -2067,11 +2200,16 @@ def _formula_function(name, args, index):
     return as_series(result)
 
 
-def evaluate_formula(expression, data, types):
-    """Avalia `expression` sobre `data`. Devolve (Series, tipo da coluna: int/float/str/DATE_TYPE). Levanta FormulaError."""
-    tree, names, referenced, refs = _parse_formula(expression, list(data.columns))
+def evaluate_formula(expression, data, types, book=None):
+    """Avalia `expression` sobre `data`. Devolve (Series, tipo da coluna: int/float/str/DATE_TYPE). Levanta FormulaError.
+
+    `book` ({nome: folha}) dá acesso às outras folhas; por omissão é o livro actual.
+    """
+    book = current_book() if book is None else book
+    tree, names, referenced, refs, xcols, external = _parse_formula(expression, list(data.columns), book)
     operands = {key: _formula_operand(data, col, types) for key, col in names.items()}
-    operands.update({key: _formula_reference(ends, data, types) for key, ends in refs.items()})
+    operands.update({key: _formula_reference(sheet_name, ends, data, types, book) for key, (sheet_name, ends) in refs.items()})
+    operands.update({key: _formula_operand(book[sheet_name]["table"], col, book[sheet_name]["types"]) for key, (sheet_name, col) in xcols.items()})
 
     def value_of(node):
         if isinstance(node, ast.Constant):
@@ -2112,7 +2250,8 @@ def evaluate_formula(expression, data, types):
     if pd.api.types.is_numeric_dtype(series):
         present = series.dropna()
         integral = bool((present % 1 == 0).all())
-        all_int_inputs = bool(referenced) and all(types.get(c) in (int, DATE_TYPE) for c in referenced)  # year/month/day/days de datas dão inteiros
+        input_types = [types.get(c) for c in referenced] + [book[sheet_name]["types"].get(c) for sheet_name, c in external]
+        all_int_inputs = bool(input_types) and all(t in (int, DATE_TYPE) for t in input_types)  # year/month/day/days de datas dão inteiros
         return series.astype("float64"), (int if integral and all_int_inputs and not uses_division and not uses_float_function else float)
     return series.astype(object), str
 
@@ -2120,31 +2259,88 @@ def evaluate_formula(expression, data, types):
 def formula_references(expression):
     """Colunas da folha activa que `expression` referencia (vazio se for inválida)."""
     try:
-        return _parse_formula(expression, list(table.columns))[2]  # (árvore, nomes, colunas referidas, células)
+        return _parse_formula(expression, list(table.columns)).referenced
     except FormulaError:
         return set()
 
 
+def formula_dependencies(expression, sheet_name, book):
+    """{(folha, coluna)} de que a fórmula (da folha `sheet_name`) depende, nela e noutras folhas; vazio se for inválida."""
+    try:
+        parsed = _parse_formula(expression, list(book[sheet_name]["table"].columns), book)
+    except FormulaError:
+        return set()
+    return {(sheet_name, column) for column in parsed.referenced} | parsed.external
+
+
 def formula_users(col):
-    """Colunas calculadas cuja fórmula usa `col`."""
-    return [c for c, expression in meta["formulas"].items() if c != col and col in formula_references(expression)]
+    """Colunas calculadas (desta e de outras folhas, estas como `Folha!coluna`) cuja fórmula usa a coluna `col` da folha activa."""
+    book = current_book()
+    target = (active_name, col)
+    users = []
+    for sheet_name, sheet in book.items():
+        for column, expression in sheet["meta"]["formulas"].items():
+            if (sheet_name, column) != target and target in formula_dependencies(expression, sheet_name, book):
+                users.append(column if sheet_name == active_name else f"{sheet_name}!{column}")
+    return users
+
+
+def sheet_formula_users(name):
+    """Colunas calculadas de OUTRAS folhas cuja fórmula usa a folha `name` (como `Folha!coluna`)."""
+    book = current_book()
+    return [
+        f"{sheet_name}!{column}"
+        for sheet_name, sheet in book.items() if sheet_name != name
+        for column, expression in sheet["meta"]["formulas"].items()
+        if any(dep_sheet == name for dep_sheet, _ in formula_dependencies(expression, sheet_name, book))
+    ]
+
+
+def _formula_order(book):
+    """Colunas calculadas de todo o livro: (as que se podem calcular, por ordem de dependência; as que estão em ciclo)."""
+    expressions = {
+        (sheet_name, column): expression
+        for sheet_name, sheet in book.items() for column, expression in sheet["meta"]["formulas"].items()
+        if column in sheet["table"].columns
+    }
+    pending = {node: {dep for dep in formula_dependencies(expression, node[0], book) if dep in expressions} for node, expression in expressions.items()}
+    order = []
+    while pending:
+        ready = [node for node, deps in pending.items() if not deps & pending.keys()]
+        if not ready:
+            break
+        order.extend(ready)
+        for node in ready:
+            del pending[node]
+    return order, list(pending)
 
 
 def recalculate_formulas():
-    """Recalcula as colunas calculadas da folha activa, pela ordem de criação. Uma fórmula que falhe deixa a coluna em branco e avisa."""
-    for col, expression in list(meta["formulas"].items()):
-        if col not in table.columns:
-            continue
+    """Recalcula as colunas calculadas de todo o livro, de modo que cada uma só se calcula depois das que usa.
+
+    Uma fórmula que falhe (ou que dependa de si própria) deixa a coluna em branco e avisa.
+    """
+    book = current_book()
+    order, circular = _formula_order(book)
+    for sheet_name, col in [*order, *circular]:
+        sheet = book[sheet_name]
+        label = col if sheet_name == active_name else f"{sheet_name}!{col}"
         try:
-            series, col_type = evaluate_formula(expression, table, col_types)
+            if (sheet_name, col) in circular:
+                raise FormulaError("referência circular")
+            series, col_type = evaluate_formula(sheet["meta"]["formulas"][col], sheet["table"], sheet["types"], book)
         except FormulaError as e:
-            log.warning("Fórmula de %r falhou: %s", col, e)
-            print(f"{UI_INDENT_1}Aviso: a fórmula de '{col}' falhou ({e}); a coluna fica em branco.")
-            series, col_type = pd.Series(np.nan, index=table.index, dtype="float64"), float
-        table[col] = series
-        col_types[col] = col_type
-    if meta["formulas"]:
-        apply_types()
+            log.warning("Fórmula de %r falhou: %s", label, e)
+            print(f"{UI_INDENT_1}Aviso: a fórmula de '{label}' falhou ({e}); a coluna fica em branco.")
+            series, col_type = pd.Series(np.nan, index=sheet["table"].index, dtype="float64"), float
+        sheet["table"][col] = series
+        sheet["types"][col] = col_type
+    for sheet_name, sheet in book.items():
+        if sheet["meta"]["formulas"]:
+            if sheet_name == active_name:
+                apply_types()
+            else:
+                sheet["table"] = typed_frame(sheet["table"], sheet["types"])
 
 
 # Operações sobre colunas: adicionar, remover, renomear
@@ -4085,6 +4281,8 @@ FORMULA_HELP = (
     "Datas:   year(d) month(d) day(d) days(d1, d2)   Exemplos: Preco * Qtd   se(Idade >= 18, 1, 0)   round(Salario / 12, 2)",
     "Células: B2 = coluna B (letras abaixo), linha 2 (o nº da coluna # do ecrã); $B$2 é igual. Intervalos: B2:B9",
     "Totais:  soma(B2:B9)  media(Salario)  contar(Nome)  min(B2:B9)  max(Salario)   Exemplo: Salario / soma(Salario) * 100",
+    "Outras linhas: anterior(x)  seguinte(x)  desloca(x, n)  (n>0 = linhas seguintes)   Exemplo: Total - anterior(Total)",
+    "Outras folhas: Vendas!B2  'Vendas 2025'!B2:B9  Vendas![Preço]3  soma(Vendas![Preço])   (nome entre aspas se tiver espaços)",
 )
 
 
@@ -4098,6 +4296,8 @@ def add_formula_column():
     for line in FORMULA_HELP:
         print(f"{UI_INDENT_1}{line}")
     print(f"{UI_INDENT_1}Letras:   " + "  ".join(f"{column_letter(i)}={c}" for i, c in enumerate(table.columns)))
+    if len(sheet_names()) > 1:
+        print(f"{UI_INDENT_1}Folhas:   " + "  ".join(n for n in sheet_names() if n != active_name))
     if meta["formulas"]:
         print(f"\n{UI_INDENT_1}Fórmulas existentes:")
         for col, expression in meta["formulas"].items():
@@ -4235,7 +4435,12 @@ def delete_sheet_ui():
     name = ask_sheet("Folha a eliminar")
     if name is None or not confirm(f"Eliminar a folha '{name}' e os seus dados?"):
         return
-    delete_sheet(name)
+    try:
+        delete_sheet(name)
+    except ValueError as e:
+        print(f"{UI_INDENT_1}{e}.")
+        pause()
+        return
     commit()
     print(f"\n{UI_INDENT_1}Folha '{name}' eliminada (pode desfazer com [U]).")
     pause()
