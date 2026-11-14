@@ -1,5 +1,7 @@
 # Diagnóstico — TermiFolha v1.0
 
+> **Estado actual: todos os problemas abaixo estão resolvidos** (ver a tabela «Estado após as correcções»); as únicas excepções são decisões do dono do projecto (M5 e B3). Este documento é o registo da auditoria à v1.0 e não é actualizado com o código.
+
 > Fase 2. Resultados reais obtidos em Python 3.13.12 / pandas 3.0.2 / numpy 2.4.4 / matplotlib 3.10.9 / python-docx 1.2.0 / fpdf 1.7.2 (Windows 11).
 > **[R]** = reproduzido a correr o código. **[L]** = encontrado por leitura, não reproduzido.
 
@@ -92,7 +94,7 @@ Qualquer alteração futura é cega. `fpdf` e `fpdf2` expõem o mesmo módulo `f
 | B2 importar sem confirmar | corrigido | `feat` |
 | B3 monólito | **por decisão do dono, a aplicação mantém-se num único ficheiro**; identificadores traduzidos | `refactor` |
 | B4 PDF | corrigido | `fix(B4)` |
-| B5 avisos do ruff | corrigido | lint limpo com a configuração do projecto |
+| B5 avisos do ruff | corrigido: 11 `global` desnecessários removidos e 5 `except Exception` estreitados para `ValueError`/`TypeError`/`OverflowError`; os 2 que têm de ser genéricos (ler o estado, avaliar fórmulas) estão justificados com `noqa` | lint limpo com a configuração do projecto e com `BLE`/`PLW0602` |
 
 ## Ordem de ataque
 A1 → A2 → A3 → M1/M3 → M4 → M5/M6 → M7 (testes, dependências, `.gitignore`, README) → B3 (refactor com testes já a proteger).

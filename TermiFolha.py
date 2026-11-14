@@ -729,7 +729,6 @@ def _read_legacy_pickle(path):
 
 
 def load_state():
-    global table, col_types, meta
     if os.path.exists(STATE_FILE):
         path, reader, migrated = STATE_FILE, _read_state_file, False
     elif os.path.exists(LEGACY_STATE_FILE):
@@ -739,7 +738,7 @@ def load_state():
 
     try:
         loaded = reader(path)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - qualquer falha ao ler o estado deve ser avisada, nunca fechar o programa
         _preserve_invalid_file(path, e)
         reset_workbook()
         pause()
@@ -836,7 +835,6 @@ def rename_sheet(old, new):
 
 def delete_sheet(name):
     """Elimina uma folha (nunca a última). Se for a activa, passa a activa a vizinha."""
-    global sheets
     names = sheet_names()
     if len(names) <= 1:
         raise ValueError("o livro tem de ter pelo menos uma folha")
@@ -963,7 +961,6 @@ def confirm_replace_sheet():
 
 
 def import_excel():
-    global table, col_types
     header("IMPORTAR EXCEL")
     print()
     if not confirm_replace_sheet():
@@ -1711,7 +1708,7 @@ def add_row():
                     break
                 try:
                     converted = convert_value(val, col_type)
-                except Exception:
+                except (ValueError, OverflowError):
                     print(f"{UI_INDENT_1}Valor inválido para {type_label}.")
                     continue
                 problem = rule_violation(col, converted)
@@ -1741,7 +1738,6 @@ def add_row():
 
 
 def edit_cell():
-    global table
     if table.empty:
         print(f"{UI_INDENT_1}Sem dados para editar.")
         pause()
@@ -1796,7 +1792,7 @@ def edit_cell():
             return
         try:
             converted = convert_value(loaded, col_type)
-        except Exception:
+        except (ValueError, OverflowError):
             print(f"{UI_INDENT_1}Valor inválido.")
             continue
         problem = rule_violation(col, converted)
@@ -2102,7 +2098,7 @@ def evaluate_formula(expression, data, types):
             series = series.replace([np.inf, -np.inf], np.nan) if pd.api.types.is_float_dtype(series) else series
     except FormulaError:
         raise
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - o pandas pode falhar de muitas formas; tudo vira FormulaError
         raise FormulaError(f"operação inválida ({e})") from None
 
     uses_division = any(isinstance(n, ast.BinOp) and isinstance(n.op, ast.Div) for n in ast.walk(tree))
@@ -2166,7 +2162,6 @@ def rename_column_meta(old, new):
 
 
 def add_column():
-    global table, col_types
     if table.columns.empty:
         print(f"{UI_INDENT_1}Crie uma folha primeiro.")
         pause()
@@ -2210,7 +2205,7 @@ def add_column():
             try:
                 values.append(convert_value(val, col_type))
                 break
-            except Exception:
+            except (ValueError, OverflowError):
                 print(f"{UI_INDENT_1}Valor inválido para {type_label}.")
 
     table[name] = values
@@ -2221,7 +2216,7 @@ def add_column():
 
 
 def remove_column():
-    global table, col_types
+    global table
     if table.columns.empty:
         print(f"{UI_INDENT_1}Sem colunas para remover.")
         pause()
@@ -2257,7 +2252,7 @@ def remove_column():
 
 
 def rename_column():
-    global table, col_types
+    global table
     if table.columns.empty:
         print(f"{UI_INDENT_1}Sem colunas para renomear.")
         pause()
@@ -2393,7 +2388,7 @@ def filter_date(col):
         print(f"{UI_INDENT_1}Operador inválido.")
         pause()
         return None
-    except Exception:
+    except (ValueError, TypeError, OverflowError):
         print(f"{UI_INDENT_1}Data inválida.")
         pause()
         return None
@@ -2876,7 +2871,7 @@ def missing_data():
             col_type = type_of(col)
             try:
                 table[col] = table[col].fillna(convert_value(value, col_type))
-            except Exception as e:
+            except (ValueError, TypeError, OverflowError) as e:
                 print(f"{UI_INDENT_1}Erro: {e}")
                 pause()
                 return
