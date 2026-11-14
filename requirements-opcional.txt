@@ -1,0 +1,4 @@
+# Dependências opcionais do TermiFolha.
+# O SQLAlchemy só é preciso para importar de bases de dados que não sejam SQLite (PostgreSQL, MySQL, SQL Server, ...).
+# Instale também o driver da sua base, por exemplo: psycopg (PostgreSQL), pymysql (MySQL).
+sqlalchemy>=2.0

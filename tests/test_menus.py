@@ -8,7 +8,7 @@ _MENUS = {
     "menu_sheet": {
         "1": "new_sheet", "2": "import_excel", "3": "export_excel", "4": "export_word", "5": "export_pdf", "6": "create_dummy_sheet",
         "7": "clear_sheet", "8": "import_csv", "9": "export_csv", "A": "import_json", "B": "import_pasted", "C": "export_json",
-        "D": "export_markdown", "E": "export_html", "P": "save_project", "O": "open_project",
+        "D": "export_markdown", "E": "export_html", "F": "import_url", "G": "import_database", "P": "save_project", "O": "open_project",
     },
     "menu_rows": {"1": "add_row", "2": "edit_cell", "3": "remove_row", "4": "find_replace"},
     "menu_columns": {

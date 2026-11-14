@@ -46,18 +46,26 @@
 
 import argparse
 import ast
+import contextlib
 import copy
 import csv
 import html
+import http.client
 import io
 import json
 import logging
 import operator
 import os
+import pathlib
 import pickle
 import re
+import sqlite3
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
 from typing import NamedTuple
 
 import fpdf as fpdf_lib
@@ -1594,6 +1602,351 @@ def import_pasted():
     except Exception as e:
         log.exception("Falha em import_pasted")
         print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+# Importar de um endereço (URL) e de bases de dados
+URL_MAX_BYTES = 50 * 1024 * 1024  # limite do que se descarrega
+URL_TIMEOUT = 30  # segundos
+DB_MAX_ROWS = 1_000_000
+DB_CHUNK_ROWS = 50_000
+_FORBIDDEN_SQL = re.compile(r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|merge|attach|pragma|vacuum|call|exec|execute)\b", re.IGNORECASE)
+
+
+def is_url(text):
+    """True se `text` é um endereço http:// ou https://."""
+    return re.match(r"https?://", text.strip(), re.IGNORECASE) is not None
+
+
+def safe_url(url):
+    """Endereço sem credenciais, parâmetros nem fragmento: é o que se mostra e se regista (podem lá estar chaves de acesso)."""
+    parts = urllib.parse.urlsplit(url.strip())
+    try:
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        port = ""
+    return urllib.parse.urlunsplit((parts.scheme, (parts.hostname or "") + port, parts.path, "", ""))
+
+
+def fetch_url(url, max_bytes=None, timeout=None):
+    """Descarrega um endereço http(s) e devolve (bytes, tipo de conteúdo). Levanta ValueError (em português) se falhar."""
+    max_bytes = URL_MAX_BYTES if max_bytes is None else max_bytes
+    timeout = URL_TIMEOUT if timeout is None else timeout
+    url = url.strip()
+    if not is_url(url):
+        raise ValueError("só são aceites endereços que comecem por http:// ou https://")
+    shown = safe_url(url)
+    request = urllib.request.Request(url, headers={"User-Agent": f"{APP_NAME}/{APP_VERSION}"})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            declared = response.headers.get("Content-Length", "")
+            if declared.isdigit() and int(declared) > max_bytes:
+                raise ValueError(f"o ficheiro tem mais de {max_bytes / (1024 * 1024):g} MB")
+            data = response.read(max_bytes + 1)
+            content_type = response.headers.get_content_type()
+    except urllib.error.HTTPError as e:
+        raise ValueError(f"o servidor respondeu {e.code} ({e.reason}) em {shown}") from None
+    except urllib.error.URLError as e:
+        raise ValueError(f"não foi possível ligar a {shown} ({e.reason})") from None
+    except TimeoutError:
+        raise ValueError(f"o servidor de {shown} não respondeu em {timeout} s") from None
+    except (http.client.HTTPException, OSError) as e:
+        raise ValueError(f"falha ao descarregar {shown} ({e})") from None
+    if len(data) > max_bytes:
+        raise ValueError(f"o ficheiro tem mais de {max_bytes / (1024 * 1024):g} MB")
+    return data, content_type
+
+
+def _url_format(url, content_type, data):
+    """'xlsx', 'json' ou 'csv', pela extensão do endereço, pelo tipo de conteúdo ou pelo início dos dados."""
+    extension = os.path.splitext(urllib.parse.urlsplit(url).path)[1].lower()
+    if data[:4] == b"\xd0\xcf\x11\xe0":
+        raise ValueError("o formato .xls antigo não é suportado (grave o ficheiro como .xlsx)")
+    for kind, extensions in (("csv", (".csv", ".tsv", ".txt")), ("json", (".json",)), ("xlsx", (".xlsx",))):
+        if extension in extensions:
+            return kind
+    if "json" in content_type:
+        return "json"
+    if "spreadsheetml" in content_type:
+        return "xlsx"
+    if data[:2] == b"PK":
+        return "xlsx"
+    return "json" if data.lstrip()[:1] in (b"{", b"[") else "csv"
+
+
+def _decode_text(data):
+    for file_encoding in ("utf-8-sig", "latin-1"):
+        try:
+            return data.decode(file_encoding)
+        except UnicodeDecodeError:
+            continue
+    raise ValueError("não foi possível descodificar o texto")  # latin-1 nunca falha; fica por segurança
+
+
+def read_url_frames(url):
+    """Descarrega um .xlsx, .csv ou .json e devolve ({nome: DataFrame}, formato). Levanta ValueError se falhar."""
+    data, content_type = fetch_url(url)
+    kind = _url_format(url, content_type, data)
+    try:
+        if kind == "xlsx":
+            return pd.read_excel(io.BytesIO(data), sheet_name=None), kind
+        if kind == "json":
+            return {"": json_to_dataframe(json.loads(_decode_text(data)))}, kind
+        return {"": parse_csv_text(_decode_text(data))}, kind
+    except (ValueError, ImportError, OSError, zipfile.BadZipFile) as e:
+        raise ValueError(f"o conteúdo de {safe_url(url)} não é um {kind} válido ({e})") from None
+
+
+def adopt_frames(frames, detect_dates=False, ask_integers=False):
+    """Uma só tabela torna-se a folha activa; várias substituem o livro (uma folha cada)."""
+    if len(frames) == 1:
+        adopt_dataframe(next(iter(frames.values())), detect_dates, ask_integers)
+    else:
+        adopt_workbook(frames, detect_dates, ask_integers)
+
+
+def import_url():
+    header("IMPORTAR DE UM ENDEREÇO (URL)")
+    print()
+    print(f"{UI_INDENT_1}Aceita .xlsx, .csv e .json em http:// ou https:// (até {URL_MAX_BYTES / (1024 * 1024):g} MB).")
+    print(f"{UI_INDENT_1}Atenção: o endereço pode conter chaves de acesso; o programa não as mostra nem regista.\n")
+    if not confirm_replace_sheet():
+        return
+    url = input(f"{UI_INDENT_1}Endereço ('sair' cancela): ").strip()
+    if not url or url.lower() == "sair":
+        return
+    try:
+        print(f"{UI_INDENT_1}A descarregar...")
+        frames, kind = read_url_frames(url)
+        adopt_frames(frames, detect_dates=kind != "xlsx", ask_integers=kind == "xlsx")
+        suffix = f" ({len(frames)} folhas)" if len(frames) > 1 else ""
+        print(f"\n{UI_INDENT_1}'{safe_url(url)}' importado{suffix}: {len(table)} linhas, {len(table.columns)} colunas na folha activa.")
+    except ValueError as e:
+        print(f"\n{UI_INDENT_1}Não foi possível importar: {e}.")
+    except Exception as e:  # noqa: BLE001 - qualquer falha inesperada é avisada e registada, nunca fecha o programa
+        log.exception("Falha em import_url")
+        print(f"\n{UI_INDENT_1}Erro: {e}")
+    pause()
+
+
+def _sqlite_path(source):
+    """Caminho do ficheiro SQLite, se `source` for um ficheiro ou um endereço sqlite:///...; senão None (outra base de dados)."""
+    text = source.strip()
+    if text.lower().startswith("sqlite:///"):
+        return urllib.parse.unquote(text[len("sqlite:///"):])
+    return text if "://" not in text else None
+
+
+def _sqlalchemy():
+    """O módulo sqlalchemy (opcional, só para bases de dados que não sejam SQLite). Levanta ValueError se não estiver instalado."""
+    try:
+        import sqlalchemy
+    except ImportError:
+        raise ValueError("para esta base de dados instale o SQLAlchemy e o driver respectivo (pip install sqlalchemy psycopg, pymysql, ...)") from None
+    return sqlalchemy
+
+
+def _mask_secrets(text, source):
+    """Tira a palavra-passe do endereço da base de dados de uma mensagem de erro."""
+    try:
+        password = urllib.parse.urlsplit(source.strip()).password
+    except ValueError:
+        password = None
+    return text.replace(password, "***") if password else text
+
+
+@contextlib.contextmanager
+def _open_database(source):
+    """Liga-se à base de dados só para leitura: SQLite (ficheiro ou sqlite:///...) ou, com o SQLAlchemy, qualquer outra. Levanta ValueError/FileNotFoundError."""
+    path = _sqlite_path(source)
+    if path is not None:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(2, "ficheiro não encontrado", path)
+        connection = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            yield connection
+        finally:
+            connection.close()
+        return
+    sa = _sqlalchemy()
+    try:
+        engine = sa.create_engine(source.strip())
+    except (sa.exc.ArgumentError, sa.exc.NoSuchModuleError, ImportError) as e:
+        raise ValueError(f"endereço da base de dados inválido ou driver em falta ({_mask_secrets(str(e), source)})") from None
+    try:
+        with engine.connect() as connection:
+            yield connection
+    finally:
+        engine.dispose()
+
+
+def _database_errors():
+    """Excepções que as bibliotecas de bases de dados levantam (SQLite e, se instalado, SQLAlchemy)."""
+    try:
+        import sqlalchemy
+    except ImportError:
+        return (sqlite3.Error, pd.errors.DatabaseError)
+    return (sqlite3.Error, pd.errors.DatabaseError, sqlalchemy.exc.SQLAlchemyError)
+
+
+@contextlib.contextmanager
+def _database(source):
+    """Como _open_database, mas converte os erros da base de dados em ValueError (sem palavras-passe)."""
+    try:
+        with _open_database(source) as connection:
+            yield connection
+    except _database_errors() as e:
+        first_line = str(e).strip().splitlines()[0] if str(e).strip() else type(e).__name__
+        raise ValueError(f"erro na base de dados: {_mask_secrets(first_line, source)}") from None
+
+
+def _tables_of(connection):
+    if isinstance(connection, sqlite3.Connection):
+        rows = connection.execute("SELECT name FROM sqlite_master WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' ORDER BY name").fetchall()
+        return [row[0] for row in rows]
+    inspector = _sqlalchemy().inspect(connection)
+    return sorted([*inspector.get_table_names(), *inspector.get_view_names()], key=str.lower)
+
+
+def list_tables(source):
+    """Nomes das tabelas e vistas da base de dados, por ordem alfabética."""
+    with _database(source) as connection:
+        return _tables_of(connection)
+
+
+def _check_select(query):
+    """Valida que `query` é uma única consulta de leitura (SELECT ou WITH). Devolve-a sem o ';' final. Levanta ValueError."""
+    text = query.strip().rstrip(";").strip()
+    if not text:
+        raise ValueError("a consulta está vazia")
+    if not re.match(r"(select|with)\b", text, re.IGNORECASE):
+        raise ValueError("a consulta tem de começar por SELECT (ou WITH)")
+    if ";" in text:
+        raise ValueError("só é permitida uma consulta de cada vez (sem ';' a meio)")
+    if _FORBIDDEN_SQL.search(text):
+        raise ValueError("a consulta só pode ler dados (não use INSERT, UPDATE, DELETE, DROP, ...)")
+    return text
+
+
+def _clean_database_frame(df):
+    """Prepara o resultado de uma consulta: nomes de coluna únicos e texto, binários descritos e datas sem fuso horário."""
+    df = df.copy()
+    df.columns = _unique_labels([str(c) or "coluna" for c in df.columns])
+    for col in df.columns:
+        if pd.api.types.is_datetime64_any_dtype(df[col]) and getattr(df[col].dt, "tz", None) is not None:
+            df[col] = df[col].dt.tz_localize(None)
+        elif df[col].dtype == object:
+            df[col] = df[col].map(lambda v: f"<binário, {len(v)} bytes>" if isinstance(v, (bytes, bytearray, memoryview)) else v)
+    return df
+
+
+def _read_sql(sql, connection):
+    """Executa uma consulta de leitura (por blocos, com limite de linhas). Levanta ValueError se não houver linhas ou forem demasiadas."""
+    chunks, total = [], 0
+    for chunk in pd.read_sql_query(sql, connection, chunksize=DB_CHUNK_ROWS):
+        total += len(chunk)
+        if total > DB_MAX_ROWS:
+            raise ValueError(f"a consulta devolve mais de {DB_MAX_ROWS:,} linhas; limite-a (por exemplo com LIMIT)".replace(",", " "))
+        chunks.append(chunk)
+    if not total:
+        raise ValueError("a consulta não devolveu linhas")
+    return _clean_database_frame(pd.concat(chunks, ignore_index=True))
+
+
+def read_query(source, query):
+    """Resultado de uma consulta SELECT como DataFrame. Levanta ValueError (consulta inválida, erro da base de dados ou sem linhas)."""
+    sql = _check_select(query)
+    with _database(source) as connection:
+        return _read_sql(sql, connection)
+
+
+def _quote_table(connection, name):
+    if isinstance(connection, sqlite3.Connection):
+        return '"' + name.replace('"', '""') + '"'
+    return connection.dialect.identifier_preparer.quote(name)
+
+
+def _resolve_table(tables, name):
+    for real in tables:
+        if real.lower() == name.strip().lower():
+            return real
+    raise ValueError(f"a tabela '{name.strip()}' não existe (tabelas: {', '.join(tables) or 'nenhuma'})")
+
+
+def read_table(source, name):
+    """Uma tabela (ou vista) inteira como DataFrame. Levanta ValueError se não existir."""
+    with _database(source) as connection:
+        real = _resolve_table(_tables_of(connection), name)
+        return _read_sql(f"SELECT * FROM {_quote_table(connection, real)}", connection)
+
+
+def _valid_sheet_names(names):
+    """Nomes de folha válidos e únicos a partir de nomes de tabelas (tira caracteres proibidos e corta ao limite)."""
+    result = []
+    for name in names:
+        base = "".join("_" if c in _SHEET_NAME_FORBIDDEN else c for c in str(name)).strip()
+        if "'" in base and '"' in base:
+            base = base.replace('"', "_")
+        base = base[:_SHEET_NAME_MAX].strip() or "Folha"
+        candidate, n = base, 2
+        while sheet_name_error(candidate, result):
+            suffix = f" ({n})"
+            candidate, n = base[:_SHEET_NAME_MAX - len(suffix)] + suffix, n + 1
+        result.append(candidate)
+    return result
+
+
+def read_all_tables(source):
+    """Todas as tabelas e vistas como {nome de folha: DataFrame}. Levanta ValueError se não houver nenhuma."""
+    frames = {}
+    with _database(source) as connection:
+        tables = _tables_of(connection)
+        if not tables:
+            raise ValueError("a base de dados não tem tabelas")
+        for sheet_name, table_name in zip(_valid_sheet_names(tables), tables, strict=True):
+            frames[sheet_name] = _read_sql(f"SELECT * FROM {_quote_table(connection, table_name)}", connection)
+    return frames
+
+
+def import_database():
+    header("IMPORTAR DE BASE DE DADOS")
+    print()
+    print(f"{UI_INDENT_1}Ficheiro SQLite (.db, .sqlite, .sqlite3) ou endereço SQLAlchemy, por exemplo")
+    print(f"{UI_INDENT_1}postgresql+psycopg://utilizador@servidor/base (precisa do SQLAlchemy e do driver).")
+    print(f"{UI_INDENT_1}Só lê dados. Para servidores, use uma conta só de leitura; o endereço é visível enquanto o escreve.\n")
+    if not confirm_replace_sheet():
+        return
+    source = input(f"{UI_INDENT_1}Ficheiro ou endereço ('sair' cancela): ").strip()
+    if not source or source.lower() == "sair":
+        return
+    try:
+        tables = list_tables(source)
+        if not tables:
+            print(f"\n{UI_INDENT_1}A base de dados não tem tabelas.")
+            pause()
+            return
+        print(f"\n{UI_INDENT_1}Tabelas: " + ", ".join(f"[{i}] {t}" for i, t in enumerate(tables, 1)))
+        answer = input(f"{UI_INDENT_1}Tabela (nome ou nº), [*] todas, ou uma consulta SELECT ('sair' cancela): ").strip()
+        if not answer or answer.lower() == "sair":
+            return
+        if answer == "*":
+            frames = read_all_tables(source)
+        elif re.match(r"(select|with)\b", answer, re.IGNORECASE):
+            frames = {"": read_query(source, answer)}
+        else:
+            name = tables[int(answer) - 1] if answer.isdigit() and 1 <= int(answer) <= len(tables) else answer
+            frames = {"": read_table(source, name)}
+        adopt_frames(frames, detect_dates=True, ask_integers=True)
+        suffix = f" ({len(frames)} folhas)" if len(frames) > 1 else ""
+        print(f"\n{UI_INDENT_1}Importado{suffix}: {len(table)} linhas, {len(table.columns)} colunas na folha activa.")
+    except FileNotFoundError:
+        print(f"\n{UI_INDENT_1}Ficheiro '{source}' não encontrado.")
+    except ValueError as e:
+        print(f"\n{UI_INDENT_1}Não foi possível importar: {_mask_secrets(str(e), source)}.")
+    except Exception as e:  # noqa: BLE001 - qualquer falha inesperada é avisada e registada, nunca fecha o programa
+        log.exception("Falha em import_database")
+        print(f"\n{UI_INDENT_1}Erro: {_mask_secrets(str(e), source)}")
     pause()
 
 
@@ -4864,12 +5217,13 @@ def menu_sheet():
         print(f"{UI_INDENT_1}[8] Importar CSV")
         print(f"{UI_INDENT_1}[9] Exportar CSV")
         print(f"{UI_INDENT_1}[A] Importar JSON          [B] Colar dados (CSV / Excel)")
+        print(f"{UI_INDENT_1}[F] Importar de URL        [G] Importar de base de dados (SQLite, SQL)")
         print(f"{UI_INDENT_1}[C] Exportar JSON          [D] Exportar Markdown     [E] Exportar HTML")
         print(f"{UI_INDENT_1}[P] Guardar projecto       [O] Abrir projecto (todas as folhas)")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "P", "O", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F", "G", "P", "O", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -4892,7 +5246,7 @@ def menu_sheet():
             export_csv()
         else:
             {"A": import_json, "B": import_pasted, "C": export_json, "D": export_markdown, "E": export_html,
-             "P": save_project, "O": open_project}[choice]()
+             "F": import_url, "G": import_database, "P": save_project, "O": open_project}[choice]()
 
 
 def menu_rows():
@@ -5131,7 +5485,14 @@ def build_parser():
                     "com --importar/--projecto/--exportar corre sem interacção (não lê nem grava o estado da sessão).",
         epilog="Exemplo: python TermiFolha.py --importar vendas.csv --exportar vendas.xlsx --exportar relatorio.html",
     )
-    parser.add_argument("--importar", metavar="FICHEIRO", help="importa um .xlsx, .csv ou .json para a folha activa (o Excel com várias folhas importa todas)")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument("--importar", metavar="FICHEIRO_OU_URL",
+                        help="importa um .xlsx, .csv ou .json (ficheiro ou endereço http/https) para a folha activa (o Excel com várias folhas importa todas)")
+    source.add_argument("--base-dados", metavar="FICHEIRO_OU_ENDEREÇO",
+                        help="importa de uma base de dados (ficheiro SQLite ou endereço SQLAlchemy); indique --tabela ou --consulta")
+    query = parser.add_mutually_exclusive_group()
+    query.add_argument("--tabela", metavar="NOME", help="com --base-dados: a tabela a importar ('*' = todas, uma folha cada)")
+    query.add_argument("--consulta", metavar="SELECT", help="com --base-dados: uma consulta SELECT cujo resultado é importado")
     parser.add_argument("--projecto", metavar="FICHEIRO", help=f"abre um ficheiro de projecto ({EXT_PROJECT}) com todas as folhas")
     parser.add_argument("--exportar", metavar="FICHEIRO", action="append", default=[],
                         help="exporta a folha activa; o formato vem da extensão (.xlsx .csv .json .md .html .docx .pdf); pode repetir-se")
@@ -5143,6 +5504,10 @@ def build_parser():
 
 def load_file_non_interactive(path):
     """Importa um ficheiro (por extensão) sem fazer perguntas. Levanta ValueError se o formato não for suportado."""
+    if is_url(path):
+        frames, kind = read_url_frames(path)
+        adopt_frames(frames, detect_dates=kind != "xlsx")
+        return
     extension = os.path.splitext(path)[1].lower()
     if extension == ".xlsx":
         frames = pd.read_excel(path, sheet_name=None)
@@ -5158,6 +5523,18 @@ def load_file_non_interactive(path):
         raise ValueError(f"formato não suportado para importar: '{extension or path}' (use .xlsx, .csv ou .json)")
 
 
+def load_database_non_interactive(source, table_name, query):
+    """Importa de uma base de dados sem fazer perguntas. Levanta ValueError se faltar a tabela ou a consulta."""
+    if bool(table_name) == bool(query):
+        raise ValueError("com --base-dados indique --tabela ou --consulta (só um deles)")
+    if query:
+        adopt_frames({"": read_query(source, query)}, detect_dates=True)
+    elif table_name.strip() == "*":
+        adopt_frames(read_all_tables(source), detect_dates=True)
+    else:
+        adopt_frames({"": read_table(source, table_name)}, detect_dates=True)
+
+
 def run_batch(args):
     """Modo não interactivo: abre/importa, exporta e termina. Devolve o código de saída (0 = tudo bem)."""
     global STATE_ENABLED
@@ -5166,12 +5543,20 @@ def run_batch(args):
     if unknown:
         print(f"Erro: formato de exportação não suportado em {', '.join(unknown)} (use {' '.join(_EXPORTERS)}).", file=sys.stderr)
         return 2
+    if args.base_dados and not (args.tabela or args.consulta):
+        print("Erro: com --base-dados indique --tabela (ou '*' para todas) ou --consulta.", file=sys.stderr)
+        return 2
+    if (args.tabela or args.consulta) and not args.base_dados:
+        print("Erro: --tabela e --consulta só se usam com --base-dados.", file=sys.stderr)
+        return 2
     try:
         if args.projecto:
             sheet_list, active, _file_settings = _read_state_file(args.projecto)
             _install_workbook(sheet_list, active, dict(settings))
         if args.importar:
             load_file_non_interactive(args.importar)
+        if args.base_dados:
+            load_database_non_interactive(args.base_dados, args.tabela, args.consulta)
         if args.exportar and table.columns.empty:
             print("Erro: não há dados para exportar (indique --importar ou --projecto).", file=sys.stderr)
             return 1
@@ -5181,9 +5566,9 @@ def run_batch(args):
     except FileNotFoundError as e:
         print(f"Erro: ficheiro '{e.filename}' não encontrado.", file=sys.stderr)
         return 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - qualquer falha vira uma mensagem e o código de saída 1
         log.exception("Falha no modo não interactivo")
-        print(f"Erro: {e}", file=sys.stderr)
+        print(f"Erro: {_mask_secrets(str(e), args.base_dados or '')}", file=sys.stderr)
         return 1
     return 0
 
@@ -5191,7 +5576,7 @@ def run_batch(args):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     configure_log()
-    if args.importar or args.projecto or args.exportar:
+    if args.importar or args.projecto or args.exportar or args.base_dados or args.tabela or args.consulta:
         return run_batch(args)
     run_interactive()
     return 0
