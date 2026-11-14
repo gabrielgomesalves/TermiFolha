@@ -438,11 +438,11 @@ def ask_numeric_columns(min_n=1, max_n=None, message="Colunas numéricas (separa
         chosen.append(col)
 
     if len(chosen) < min_n:
-        print(f"{UI_INDENT_1}Deve selecionar pelo menos {min_n} coluna(s).")
+        print(f"{UI_INDENT_1}Deve seleccionar pelo menos {min_n} coluna(s).")
         pause()
         return None
     if max_n is not None and len(chosen) > max_n:
-        print(f"{UI_INDENT_1}Deve selecionar no máximo {max_n} coluna(s).")
+        print(f"{UI_INDENT_1}Deve seleccionar no máximo {max_n} coluna(s).")
         pause()
         return None
     return chosen
@@ -1786,7 +1786,7 @@ def edit_cell():
 
     col_type = type_of(col)
     current = table.at[idx, col]
-    print(f"{UI_INDENT_1}Valor atual: {format_value(current)}")
+    print(f"{UI_INDENT_1}Valor actual: {format_value(current)}")
 
     while True:
         loaded = input(f"{UI_INDENT_1}Novo valor: ").strip()
@@ -1807,7 +1807,7 @@ def edit_cell():
         break
 
     commit()
-    print(f"\n{UI_INDENT_1}Célula atualizada.")
+    print(f"\n{UI_INDENT_1}Célula actualizada.")
     pause()
 
 
@@ -3096,12 +3096,12 @@ def plot_correlation_heatmap():
         return
     data_rows = table[cols].dropna()
     if len(data_rows) < 2:
-        print(f"{UI_INDENT_1}Necessário pelo menos 2 linhas com dados válidos nas colunas selecionadas.")
+        print(f"{UI_INDENT_1}Necessário pelo menos 2 linhas com dados válidos nas colunas seleccionadas.")
         pause()
         return
     matrix = data_rows.corr().to_numpy()
     if np.isnan(matrix).all():
-        print(f"{UI_INDENT_1}Correlação indefinida para as colunas selecionadas.")
+        print(f"{UI_INDENT_1}Correlação indefinida para as colunas seleccionadas.")
         pause()
         return
     n = len(cols)
