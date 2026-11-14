@@ -1,4 +1,4 @@
-"""Fórmulas com referências a células e intervalos; título e rótulos configuráveis dos gráficos."""
+"""Fórmulas com referências a células e intervalos (ver test_graficos_guardados.py para os gráficos)."""
 import pytest
 
 
@@ -148,74 +148,3 @@ def test_ajuda_mostra_as_letras_das_colunas(app, capsys):
     app.run(app.m.add_formula_column, "sair")
 
     assert "A=Nome  B=Idade  C=Salario" in capsys.readouterr().out
-
-
-# ---- título e rótulos dos gráficos ----
-
-def test_titulo_e_rotulos_personalizados_aplicam_se_ao_proximo_grafico(app, tmp_path, monkeypatch):
-    app.dummy()
-    vistos = []
-    monkeypatch.setattr(app.m.plt, "show", lambda: vistos.append([(a.get_title(), a.get_xlabel(), a.get_ylabel()) for a in app.m.plt.gcf().axes]))
-
-    app.run(app.m.set_plot_labels, "Vendas 2026", "Pessoa", "Euros")
-    app.run(app.m.plot_scatter, "Idade,Salario")
-    app.run(app.m.plot_scatter, "Idade,Salario")
-
-    assert vistos[0] == [("Vendas 2026", "Pessoa", "Euros")]
-    assert vistos[1] == [("Dispersão: Idade vs Salario", "Idade", "Salario")]  # só valeu uma vez
-
-
-def test_so_os_campos_preenchidos_mudam(app, monkeypatch):
-    app.dummy()
-    vistos = []
-    monkeypatch.setattr(app.m.plt, "show", lambda: vistos.append(app.m.plt.gcf().axes[0].get_title()))
-
-    app.run(app.m.set_plot_labels, "", "", "Y")
-    app.run(app.m.plot_area, "Salario")
-
-    assert vistos == ["Evolução da soma acumulada"]
-
-
-def test_rotulos_personalizados_tambem_valem_ao_gravar_png(app, tmp_path, monkeypatch):
-    app.dummy()
-    monkeypatch.setattr(app.m, "plot_png_dir", str(tmp_path))
-    titulos = []
-    original = app.m.plt.savefig
-    monkeypatch.setattr(app.m.plt, "savefig", lambda *a, **k: (titulos.append(app.m.plt.gcf().axes[0].get_title()), original(*a, **k)))
-
-    app.run(app.m.set_plot_labels, "Titulo X", "", "")
-    app.run(app.m.plot_area, "Salario")
-
-    assert titulos == ["Titulo X"] and len(list(tmp_path.glob("area_*.png"))) == 1
-
-
-def test_grafico_com_barra_de_cores_muda_o_eixo_principal(app, monkeypatch):
-    app.dummy()
-    vistos = []
-    monkeypatch.setattr(app.m.plt, "show", lambda: vistos.append(app.m.plt.gcf().axes[0].get_title()))
-
-    app.run(app.m.set_plot_labels, "Correlações", "", "")
-    app.run(app.m.plot_correlation_heatmap, "Idade,Salario")
-
-    assert vistos == ["Correlações"]
-
-
-def test_texto_do_grafico_e_limpo(app):
-    limpo = app.m.clean_plot_text("  Preço  em $ e $x$  ")
-    assert limpo == r"Preço em \$ e \$x\$"
-    assert len(app.m.clean_plot_text("x" * 500)) == app.m.PLOT_TEXT_MAX
-
-
-def test_texto_com_cifrao_nao_rebenta_o_grafico(app, monkeypatch):
-    app.dummy()
-    monkeypatch.setattr(app.m.plt, "show", lambda: app.m.plt.gcf().canvas.draw())
-
-    app.run(app.m.set_plot_labels, "Custo $ total $x^$", "", "")
-    app.run(app.m.plot_area, "Salario")
-
-
-def test_cancelar_dialogo_sem_texto_limpa_o_pendente(app):
-    app.run(app.m.set_plot_labels, "A", "B", "C")
-    app.run(app.m.set_plot_labels, "", "", "")
-
-    assert not any(app.m.plot_custom.values())

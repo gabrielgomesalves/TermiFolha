@@ -49,7 +49,6 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "sheets", {app_module.DEFAULT_SHEET_NAME: None})
     monkeypatch.setattr(app_module, "active_name", app_module.DEFAULT_SHEET_NAME)
     monkeypatch.setattr(app_module, "settings", {"history_limit": app_module.HISTORY_LIMIT, "page_size": app_module.PAGE_SIZE})
-    monkeypatch.setattr(app_module, "plot_custom", {"title": "", "xlabel": "", "ylabel": ""})
     app_module.undo_stack.clear()
     app_module.redo_stack.clear()
     app_module.undo_stack.append(app_module.snapshot())

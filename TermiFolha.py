@@ -117,8 +117,8 @@ redo_stack = []
 
 
 def new_meta():
-    """Metadados de uma folha: regras de validação, formatos de apresentação, colunas visíveis, fórmulas e linha de totais."""
-    return {"rules": {}, "formats": {}, "visible": [], "formulas": {}, "totals": None}
+    """Metadados de uma folha: regras de validação, formatos de apresentação, colunas visíveis, fórmulas, linha de totais e textos dos gráficos."""
+    return {"rules": {}, "formats": {}, "visible": [], "formulas": {}, "totals": None, "charts": {}}
 
 
 meta = new_meta()
@@ -551,6 +551,7 @@ def _sheet_to_dict(name, sheet):
         "visiveis": sheet_meta["visible"],
         "formulas": sheet_meta["formulas"],
         "totais": sheet_meta["totals"],
+        "graficos": sheet_meta["charts"],
     }
 
 
@@ -593,6 +594,7 @@ def _sheet_from_dict(d, name):
     sheet_meta["visible"] = [c for c in visible if c in column_names]
     totals = d.get("totais")
     sheet_meta["totals"] = totals if totals in _TOTALS_FUNCTIONS else None
+    sheet_meta["charts"] = _sanitize_chart_labels(d.get("graficos"))
     return name, df, new_col_types, sheet_meta
 
 
@@ -2910,8 +2912,13 @@ plot_png_dir = None  # pasta onde gravar os gráficos em PNG; None = mostrá-los
 
 
 PLOT_TEXT_MAX = 120
-plot_custom = {"title": "", "xlabel": "", "ylabel": ""}  # textos para o PRÓXIMO gráfico; vazio = o automático
-_PLOT_CUSTOM_NAMES = {"title": "Título", "xlabel": "Rótulo do eixo X", "ylabel": "Rótulo do eixo Y"}
+PLOT_ALL = "*"  # chave dos textos que valem para todos os gráficos da folha
+_PLOT_FIELDS = {"title": "Título", "xlabel": "Rótulo do eixo X", "ylabel": "Rótulo do eixo Y"}
+_PLOT_NAMES = {  # nome interno (o de finish_plot) -> nome mostrado
+    "bars": "Barras", "lines": "Linhas", "pie": "Circular", "scatter": "Dispersão", "area": "Área", "histogram": "Histograma",
+    "boxplot": "Boxplot", "correlation_heatmap": "Heatmap de correlação", "moving_average": "Linhas com média móvel",
+    "polynomial_trend": "Tendência polinomial",
+}
 
 
 def clean_plot_text(text):
@@ -2919,32 +2926,107 @@ def clean_plot_text(text):
     return " ".join(text.split())[:PLOT_TEXT_MAX].replace("$", r"\$")
 
 
-def apply_plot_labels():
-    """Aplica ao gráfico aberto os textos escolhidos pelo utilizador e limpa-os (valem só para um gráfico)."""
-    if any(plot_custom.values()) and plt.get_fignums():
+def _sanitize_chart_labels(raw):
+    """Aceita só textos de gráficos válidos ({gráfico ou '*': {campo: texto}}); o resto é ignorado."""
+    clean = {}
+    if not isinstance(raw, dict):
+        return clean
+    for key, fields in raw.items():
+        if (key != PLOT_ALL and key not in _PLOT_NAMES) or not isinstance(fields, dict):
+            continue
+        texts = {f: clean_plot_text(v) for f, v in fields.items() if f in _PLOT_FIELDS and isinstance(v, str)}
+        texts = {f: v for f, v in texts.items() if v}
+        if texts:
+            clean[key] = texts
+    return clean
+
+
+def chart_labels(name):
+    """Textos a usar no gráfico `name` na folha activa: os de «todos os gráficos» e, por cima, os desse gráfico."""
+    labels = dict(meta["charts"].get(PLOT_ALL, {}))
+    labels.update(meta["charts"].get(name, {}))
+    return labels
+
+
+def apply_plot_labels(name):
+    """Aplica ao gráfico aberto os textos guardados para a folha (o gráfico circular não tem eixos)."""
+    labels = chart_labels(name)
+    if labels and plt.get_fignums():
         axes = plt.gcf().axes[0]
-        if plot_custom["title"]:
-            axes.set_title(plot_custom["title"])
-        if plot_custom["xlabel"]:
-            axes.set_xlabel(plot_custom["xlabel"])
-        if plot_custom["ylabel"]:
-            axes.set_ylabel(plot_custom["ylabel"])
-    for key in plot_custom:
-        plot_custom[key] = ""
+        if "title" in labels:
+            axes.set_title(labels["title"])
+        if name != "pie" and "xlabel" in labels:
+            axes.set_xlabel(labels["xlabel"])
+        if name != "pie" and "ylabel" in labels:
+            axes.set_ylabel(labels["ylabel"])
+
+
+def _describe_plot_labels():
+    """Linhas de texto com os títulos e rótulos guardados na folha activa."""
+    lines = []
+    for key, fields in meta["charts"].items():
+        who = "todos os gráficos" if key == PLOT_ALL else _PLOT_NAMES[key].lower()
+        lines.append(f"{who}: " + "; ".join(f"{_PLOT_FIELDS[f].lower()} «{v}»" for f, v in fields.items()))
+    return lines
 
 
 def set_plot_labels():
-    header("TÍTULO E RÓTULOS DO PRÓXIMO GRÁFICO")
-    print(f"{UI_INDENT_1}Enter = manter o texto automático. Vale só para o próximo gráfico.\n")
-    for key, label in _PLOT_CUSTOM_NAMES.items():
-        plot_custom[key] = clean_plot_text(input(f"{UI_INDENT_1}{label}: "))
-    print(f"\n{UI_INDENT_1}Guardado." if any(plot_custom.values()) else f"\n{UI_INDENT_1}Os próximos gráficos usam os textos automáticos.")
+    """Define (ou limpa) o título e os rótulos dos eixos de um gráfico, ou de todos. Ficam gravados com a folha."""
+    header("TÍTULO E RÓTULOS DOS GRÁFICOS")
+    print(f"{UI_INDENT_1}Os textos ficam gravados com a folha e usam-se sempre que o gráfico for desenhado.\n")
+    saved = _describe_plot_labels()
+    if saved:
+        print(f"{UI_INDENT_1}Guardados nesta folha:")
+        for line in saved:
+            print(f"{UI_INDENT_2}{line}")
+        print()
+    print(f"{UI_INDENT_1}[0] Todos os gráficos")
+    for i, label in enumerate(_PLOT_NAMES.values(), 1):
+        print(f"{UI_INDENT_1}[{i}] {label}")
+    print(f"{UI_INDENT_1}[L] Apagar todos os textos guardados")
+    choice = input(f"\n{UI_INDENT_1}Para que gráfico ('sair' cancela): ").strip().upper()
+    if not choice or choice == "SAIR":
+        return
+    if choice == "L":
+        if not meta["charts"]:
+            print(f"\n{UI_INDENT_1}Não há textos guardados nesta folha.")
+        elif confirm("Apagar os títulos e rótulos guardados nesta folha?"):
+            meta["charts"] = {}
+            commit()
+            print(f"\n{UI_INDENT_1}Textos apagados. Os gráficos usam os textos automáticos.")
+        else:
+            print(f"\n{UI_INDENT_1}Operação cancelada.")
+        pause()
+        return
+    keys = [PLOT_ALL, *_PLOT_NAMES]
+    if not choice.isdigit() or int(choice) >= len(keys):
+        print(f"{UI_INDENT_1}Opção inválida.")
+        pause()
+        return
+    key = keys[int(choice)]
+    current = dict(meta["charts"].get(key, {}))
+    print(f"\n{UI_INDENT_1}Enter = manter o que está, '-' = apagar (volta ao texto automático).\n")
+    for field, label in _PLOT_FIELDS.items():
+        shown = f" [{current[field]}]" if field in current else ""
+        answer = input(f"{UI_INDENT_1}{label}{shown}: ").strip()
+        if answer == "-":
+            current.pop(field, None)
+        elif answer:
+            text = clean_plot_text(answer)
+            if text:
+                current[field] = text
+    if current:
+        meta["charts"][key] = current
+    else:
+        meta["charts"].pop(key, None)
+    commit()
+    print(f"\n{UI_INDENT_1}Guardado na folha '{active_name}'.")
     pause()
 
 
 def finish_plot(name):
     """Termina um gráfico: mostra-o numa janela ou, com a gravação em PNG activa, grava-o e fecha-o."""
-    apply_plot_labels()
+    apply_plot_labels(name)
     if plot_png_dir is None:
         plt.show()
         return
@@ -3319,8 +3401,8 @@ def menu_charts():
         print(f"{UI_INDENT_1}[9] Linhas com média móvel")
         print(f"{UI_INDENT_1}[A] Tendência polinomial")
         print(f"{UI_INDENT_1}[B] Gravar gráficos em PNG: {'ligado (' + plot_png_dir + ')' if plot_png_dir else 'desligado'}")
-        pending = [f"{_PLOT_CUSTOM_NAMES[k].lower()}: {v}" for k, v in plot_custom.items() if v]
-        print(f"{UI_INDENT_1}[C] Título e rótulos do próximo gráfico" + (f" ({'; '.join(pending)})" if pending else ""))
+        saved = f" ({len(meta['charts'])} guardado(s) nesta folha)" if meta["charts"] else ""
+        print(f"{UI_INDENT_1}[C] Título e rótulos dos gráficos{saved}")
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
