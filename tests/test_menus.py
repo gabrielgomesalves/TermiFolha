@@ -19,7 +19,7 @@ _MENUS = {
     "menu_advanced": {"1": "info_summary", "2": "group_by", "3": "duplicates", "4": "missing_data", "5": "pivot_table_ui", "6": "outliers"},
     "menu_charts": {
         "1": "plot_bars", "2": "plot_lines", "3": "plot_pie", "4": "plot_scatter", "5": "plot_area", "6": "plot_histogram", "7": "plot_boxplot",
-        "8": "plot_correlation_heatmap", "9": "plot_moving_average", "A": "plot_polynomial_trend", "B": "toggle_png_export",
+        "8": "plot_correlation_heatmap", "9": "plot_moving_average", "A": "plot_polynomial_trend", "B": "toggle_png_export", "C": "set_plot_labels",
     },
     "menu_workbook": {
         "M": "switch_sheet_ui", "A": "add_blank_sheet", "R": "rename_sheet_ui", "E": "delete_sheet_ui", "D": "duplicate_sheet_ui",

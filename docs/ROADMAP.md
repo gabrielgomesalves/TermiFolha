@@ -17,6 +17,10 @@ Estado do backlog definido na auditoria. A aplicação mantém-se num **único f
 | Testes em Python 3.13 e 3.15 | Passam com os pacotes mais recentes (pandas 3.1, numpy 2.5, matplotlib 3.11, fpdf2 2.9). |
 | Manual desactualizado | `docs/MANUAL.md`. O PDF não foi alterado: a fonte não está no repositório. |
 
+## Concluído na v1.3
+
+Fórmulas com referências a células e intervalos (`B2`, `B2:B9`) e agregados (`soma`, `media`, `contar`, `min`, `max`), título e rótulos de gráficos configuráveis e manual em PDF regenerado a partir de `MANUAL.md`.
+
 ## Concluído na v1.2
 
 Colunas calculadas, procurar/substituir, converter tipo, várias folhas, juntar/empilhar, tabela dinâmica, desfazer configurável, ver por páginas, colunas visíveis, regras de validação, formatação de valores, correlação, outliers, normalizar, faixas, gráficos em PNG, JSON, colar dados, Markdown/HTML, projectos e modo de linha de comandos. Ver `CHANGELOG.md`.
@@ -25,9 +29,8 @@ Colunas calculadas, procurar/substituir, converter tipo, várias folhas, juntar/
 
 | Item | Impacto | Esforço | Notas |
 |---|---|---|---|
-| Regenerar o manual em PDF a partir de `MANUAL.md` | Baixo | Baixo | Opcional. |
-| Fórmulas com referência a células (`A1`) e intervalos | Médio | Alto | Hoje as fórmulas são por coluna (vectoriais). |
-| Gráficos: títulos e rótulos configuráveis | Baixo | Médio | |
+| Referências relativas (que acompanham a linha) e entre folhas | Médio | Alto | Hoje uma referência é sempre a mesma célula. |
+| Guardar o título e rótulos dos gráficos | Baixo | Baixo | Hoje valem só para o gráfico seguinte. |
 | Importar de bases de dados / URLs | Baixo | Médio | Fora do âmbito de uma ferramenta local. |
 | Nomes das funções de teste em inglês | Baixo | Médio | Hoje descrevem o comportamento em português. |
 | Fonte Unicode no `fpdf` antigo | Baixo | Médio | Evitado de propósito: o `fpdf` 1.7 escreve ficheiros de cache na pasta da fonte. Basta usar `fpdf2`. |

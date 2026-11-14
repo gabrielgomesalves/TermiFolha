@@ -379,7 +379,7 @@ def test_cli_ficheiro_json_invalido_da_erro_sem_traceback(cli, tmp_path, capsys)
 def test_cli_versao_e_argumentos_invalidos(cli, capsys):
     with pytest.raises(SystemExit) as saida:
         cli.m.main(["--versao"])
-    assert saida.value.code == 0 and "TermiFolha 1.2" in capsys.readouterr().out
+    assert saida.value.code == 0 and "TermiFolha 1.3" in capsys.readouterr().out
 
     with pytest.raises(SystemExit) as saida:
         cli.m.main(["--nao-existe"])

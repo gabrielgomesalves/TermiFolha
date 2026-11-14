@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0]
+
+### Adicionado
+- **Fórmulas com referências a células e intervalos**: `B2`, `$B$2`, `[Salario]2`, `B2:B9`; letras de coluna (A, B, … AA) mostradas no ecrã da fórmula; linhas como na coluna `#`.
+- **Agregados em fórmulas**: `soma`, `media`, `contar`, `min(x)`, `max(x)` sobre uma coluna, um intervalo ou uma expressão (`Salario / soma(Salario) * 100`).
+- **Título e rótulos dos eixos configuráveis** para o próximo gráfico (Gráficos → `[C]`), no ecrã ou em PNG.
+- **Manual em PDF regenerado** (v1.3) a partir de `docs/MANUAL.md`, com o gerador `docs/gerar_manual_pdf.py`; substitui o PDF da v1.0.
+
+### Alterado
+- As fórmulas são gravadas com os nomes das colunas (`B2` → `[Idade]2`), para não dependerem da posição.
+- `min` e `max` aceitam um argumento (agregado) ou dois (linha a linha).
+- O texto entre aspas numa fórmula nunca é lido como nome de coluna ou célula.
+- Versão 1.3. O formato do estado não mudou (v2).
+
 ## [1.2.0]
 
 ### Adicionado

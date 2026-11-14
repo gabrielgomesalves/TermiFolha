@@ -13,7 +13,7 @@
 # TermiFolha — Folha de Cálculo CLI
 #
 # Autor: Gabriel Gomes Alves
-# Versão: 1.2
+# Versão: 1.3
 #
 # Descrição: TermiFolha é uma aplicação de folha de cálculo em linha de comando, permite criar, editar, filtrar e analisar dados de uma folha de cálculo (DataFrame) de forma simples e eficiente.
 #
@@ -70,7 +70,7 @@ from fpdf import FPDF
 # Constantes da aplicação (nome, versão, ficheiros, dimensões UI)
 APP_NAME          = "TermiFolha"
 APP_TITLE        = "TermiFolha  —  Folha de Cálculo CLI"
-APP_VERSION        = "1.2"
+APP_VERSION        = "1.3"
 APP_AUTHOR         = "Gabriel Gomes Alves"
 _PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")
@@ -1861,15 +1861,78 @@ _FORMULA_NODES = (
     ast.Expression, ast.BinOp, ast.UnaryOp, ast.BoolOp, ast.Compare, ast.Call, ast.Name, ast.Constant, ast.Load,
     ast.And, ast.Or, ast.Not, ast.USub, ast.UAdd, *_FORMULA_BINARY, *_FORMULA_COMPARE,
 )
+_FORMULA_AGGREGATES = {"soma": "sum", "sum": "sum", "media": "mean", "average": "mean", "avg": "mean", "contar": "count", "count": "count"}  # nome -> agregação
 _FORMULA_ARITY = {  # nome -> (mínimo, máximo) de argumentos
     "abs": (1, 1), "round": (1, 2), "sqrt": (1, 1), "log": (1, 1), "exp": (1, 1), "floor": (1, 1), "ceil": (1, 1),
-    "min": (2, 2), "max": (2, 2), "se": (3, 3), "year": (1, 1), "month": (1, 1), "day": (1, 1), "days": (2, 2),
+    "min": (1, 2), "max": (1, 2), "se": (3, 3), "year": (1, 1), "month": (1, 1), "day": (1, 1), "days": (2, 2),
+    **dict.fromkeys(_FORMULA_AGGREGATES, (1, 1)),
 }
-_FORMULA_FLOAT_FUNCTIONS = {"sqrt", "log", "exp"}  # produzem sempre decimais
+_FORMULA_FLOAT_FUNCTIONS = {"sqrt", "log", "exp", "media", "average", "avg"}  # produzem sempre decimais
+
+# Referências a células: coluna por letra (A = 1.ª coluna) ou por nome entre parênteses rectos, mais o nº da linha como no ecrã (#, a começar em 0).
+# `B2` é uma célula, `B2:B9` um intervalo (só dentro de soma/media/contar/min/max). São sempre fixas; o `$` é aceite e ignorado.
+_CELL_PATTERN = r"\$?[A-Za-z]{1,3}\$?\d+"
+_BRACKET_CELL_PATTERN = r"\[[^\[\]]+\]\$?\d+"
+_REF_PATTERN = rf"(?:{_BRACKET_CELL_PATTERN}|{_CELL_PATTERN})"
+_FORMULA_TOKEN = re.compile(
+    r"""(?P<text>'[^']*'|"[^"]*")"""  # texto entre aspas: fica como está
+    rf"""|(?P<ref>(?<![\w.]){_REF_PATTERN}(?:\s*:\s*{_REF_PATTERN})?(?![\w(\[.]))"""
+    r"""|(?P<column>\[[^\[\]]+\])"""
+)
+
+
+def column_letter(index):
+    """Letra da coluna na posição `index` (0 -> A, 25 -> Z, 26 -> AA)."""
+    letters = ""
+    index += 1
+    while index:
+        index, rest = divmod(index - 1, 26)
+        letters = chr(65 + rest) + letters
+    return letters
+
+
+def _cell_endpoint(token, columns):
+    """('B2' ou '[Salario]2') -> (nome da coluna, nº da linha). Levanta FormulaError."""
+    token = token.strip()
+    if token.startswith("["):
+        name, row = re.fullmatch(r"\[([^\[\]]+)\]\$?(\d+)", token).groups()
+        column = resolve_column(name.strip(), source=columns)
+        if column is None:
+            raise FormulaError(f"coluna inexistente: [{name.strip()}]")
+        return column, int(row)
+    letters, row = re.fullmatch(r"\$?([A-Za-z]+)\$?(\d+)", token).groups()
+    index = 0
+    for char in letters.upper():
+        index = index * 26 + ord(char) - 64
+    if index > len(columns):
+        raise FormulaError(f"a coluna {letters.upper()} não existe (a folha tem {len(columns)} coluna(s))")
+    return columns[index - 1], int(row)
+
+
+def _is_column_name(token, columns):
+    """Uma 'célula' como `Q1` que é afinal o nome de uma coluna existente (o nome ganha à referência)."""
+    return ":" not in token and not token.startswith("[") and resolve_column(token, source=columns) is not None
+
+
+def canonical_formula(expression, columns):
+    """Troca as referências por letra (`B2`) por referências por nome (`[Salario]2`), que não mudam se as colunas mudarem de posição."""
+    def replace(match):
+        token = match["ref"]
+        if token is None or _is_column_name(token, columns):
+            return match.group(0)
+        parts = []
+        for part in re.findall(_REF_PATTERN, token):
+            column, row = _cell_endpoint(part, columns)
+            if "[" in column or "]" in column:
+                raise FormulaError(f"a coluna '{column}' tem parênteses rectos no nome e não pode ser referida")
+            parts.append(f"[{column}]{row}")
+        return ":".join(parts)
+
+    return _FORMULA_TOKEN.sub(replace, expression.strip())
 
 
 def _parse_formula(expression, columns):
-    """Valida `expression` e devolve (árvore, {nome no texto: coluna}, colunas referidas). Levanta FormulaError."""
+    """Valida `expression` e devolve (árvore, {nome no texto: coluna}, colunas referidas, {nome no texto: extremos da célula/intervalo}). Levanta FormulaError."""
     text = expression.strip()
     if not text:
         raise FormulaError("a fórmula está vazia")
@@ -1877,16 +1940,27 @@ def _parse_formula(expression, columns):
         raise FormulaError(f"a fórmula tem mais de {_FORMULA_MAX_LENGTH} caracteres")
 
     names = {}
+    refs = {}
 
-    def bracket(match):  # [Nome com espaços] -> identificador seguro
-        column = resolve_column(match.group(1).strip(), source=columns)
-        if column is None:
-            raise FormulaError(f"coluna inexistente: [{match.group(1).strip()}]")
-        key = f"__col{len(names)}__"
-        names[key] = column
+    def replace(match):  # [Nome com espaços] e referências a células -> identificadores seguros
+        if match["text"] is not None:
+            return match["text"]
+        if match["column"] is not None:
+            name = match["column"][1:-1].strip()
+            column = resolve_column(name, source=columns)
+            if column is None:
+                raise FormulaError(f"coluna inexistente: [{name}]")
+            key = f"__col{len(names)}__"
+            names[key] = column
+            return key
+        token = match["ref"]
+        if _is_column_name(token, columns):
+            return token
+        key = f"__ref{len(refs)}__"
+        refs[key] = tuple(_cell_endpoint(part, columns) for part in re.findall(_REF_PATTERN, token))
         return key
 
-    text = re.sub(r"\[([^\[\]]+)\]", bracket, text)
+    text = _FORMULA_TOKEN.sub(replace, text)
     try:
         tree = ast.parse(text, mode="eval")
     except SyntaxError:
@@ -1896,6 +1970,10 @@ def _parse_formula(expression, columns):
         raise FormulaError("fórmula demasiado complexa")
 
     call_names = {id(n.func) for n in nodes if isinstance(n, ast.Call)}
+    aggregate_args = {  # onde um intervalo é permitido: soma/media/contar e min/max com um só argumento
+        id(arg) for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) for arg in n.args
+        if n.func.id.lower() in _FORMULA_AGGREGATES or (n.func.id.lower() in ("min", "max") and len(n.args) == 1)
+    }
     for node in nodes:
         if not isinstance(node, _FORMULA_NODES):
             raise FormulaError(f"expressão não permitida ({type(node).__name__})")
@@ -1910,13 +1988,21 @@ def _parse_formula(expression, columns):
             low, high = _FORMULA_ARITY[func.id.lower()]
             if not low <= len(node.args) <= high:
                 raise FormulaError(f"'{func.id}' espera entre {low} e {high} argumento(s)")
+        elif isinstance(node, ast.Name) and node.id in refs:
+            if len(refs[node.id]) > 1 and id(node) not in aggregate_args:
+                raise FormulaError("um intervalo só pode ser usado dentro de soma, media, contar, min ou max")
         elif isinstance(node, ast.Name) and id(node) not in call_names and node.id not in names:
             column = resolve_column(node.id, source=columns)
             if column is None:
                 raise FormulaError(f"coluna ou função desconhecida: '{node.id}'")
             names[node.id] = column
-    referenced = {names[n.id] for n in nodes if isinstance(n, ast.Name) and id(n) not in call_names}
-    return tree, names, referenced
+    referenced = {names[n.id] for n in nodes if isinstance(n, ast.Name) and id(n) not in call_names and n.id in names}
+    referenced |= {column for ends in refs.values() for column, _ in ends}
+    for ends in refs.values():
+        if len(ends) > 1:  # um intervalo abrange todas as colunas entre os extremos
+            positions = sorted(list(columns).index(column) for column, _ in ends)
+            referenced |= set(list(columns)[positions[0]:positions[-1] + 1])
+    return tree, names, referenced, refs
 
 
 def _formula_operand(data, col, types):
@@ -1929,11 +2015,43 @@ def _formula_operand(data, col, types):
     return data[col].astype(object)
 
 
+def _formula_reference(ends, data, types):
+    """Valor de uma célula (escalar) ou de um intervalo (Series só com os valores) da folha. Levanta FormulaError se a linha não existir."""
+    columns = list(data.columns)
+    low, high = sorted(row for _, row in (ends[0], ends[-1]))
+    if high >= len(data):
+        raise FormulaError(f"a linha {high} não existe (linhas 0 a {len(data) - 1})" if len(data) else "a folha não tem linhas")
+    if len(ends) == 1:
+        return _formula_operand(data, ends[0][0], types).iloc[low]
+    first, last = sorted(columns.index(column) for column, _ in ends)
+    parts = [_formula_operand(data, columns[p], types).iloc[low:high + 1].reset_index(drop=True) for p in range(first, last + 1)]
+    if len(parts) == 1:
+        return parts[0]
+    return pd.Series(np.concatenate([part.to_numpy(dtype=object) for part in parts]), dtype=object)
+
+
+def _formula_aggregate(function, value):
+    """soma/media/contar/min/max de uma coluna, de um intervalo ou de um valor. Devolve um escalar."""
+    values = value if isinstance(value, pd.Series) else pd.Series([value])
+    if function == "count":
+        return np.float64(values.notna().sum())
+    if pd.api.types.is_datetime64_any_dtype(values):
+        if function in ("min", "max"):
+            return getattr(values, function)()
+        raise FormulaError("não se pode somar nem calcular a média de datas")
+    numbers = pd.to_numeric(values, errors="coerce").dropna()
+    return np.float64(getattr(numbers, function)()) if len(numbers) or function == "sum" else np.float64("nan")
+
+
 def _formula_function(name, args, index):
     """Aplica a função `name` (já validada) a `args`; devolve Series/escalar."""
     def as_series(value):
         return value if isinstance(value, pd.Series) else pd.Series(value, index=index)
 
+    if name in _FORMULA_AGGREGATES:
+        return _formula_aggregate(_FORMULA_AGGREGATES[name], args[0])
+    if name in ("min", "max") and len(args) == 1:
+        return _formula_aggregate(name, args[0])
     if name == "round":
         decimals = int(args[1]) if len(args) > 1 else 0
         return as_series(args[0]).round(decimals)
@@ -1953,8 +2071,9 @@ def _formula_function(name, args, index):
 
 def evaluate_formula(expression, data, types):
     """Avalia `expression` sobre `data`. Devolve (Series, tipo da coluna: int/float/str/DATE_TYPE). Levanta FormulaError."""
-    tree, names, referenced = _parse_formula(expression, list(data.columns))
+    tree, names, referenced, refs = _parse_formula(expression, list(data.columns))
     operands = {key: _formula_operand(data, col, types) for key, col in names.items()}
+    operands.update({key: _formula_reference(ends, data, types) for key, ends in refs.items()})
 
     def value_of(node):
         if isinstance(node, ast.Constant):
@@ -2003,7 +2122,7 @@ def evaluate_formula(expression, data, types):
 def formula_references(expression):
     """Colunas da folha activa que `expression` referencia (vazio se for inválida)."""
     try:
-        return _parse_formula(expression, list(table.columns))[2]
+        return _parse_formula(expression, list(table.columns))[2]  # (árvore, nomes, colunas referidas, células)
     except FormulaError:
         return set()
 
@@ -2795,8 +2914,42 @@ def missing_data():
 plot_png_dir = None  # pasta onde gravar os gráficos em PNG; None = mostrá-los numa janela
 
 
+PLOT_TEXT_MAX = 120
+plot_custom = {"title": "", "xlabel": "", "ylabel": ""}  # textos para o PRÓXIMO gráfico; vazio = o automático
+_PLOT_CUSTOM_NAMES = {"title": "Título", "xlabel": "Rótulo do eixo X", "ylabel": "Rótulo do eixo Y"}
+
+
+def clean_plot_text(text):
+    """Texto de título/rótulo seguro para o matplotlib: sem espaços nas pontas, limitado, e sem '$' (que o matplotlib leria como fórmula)."""
+    return " ".join(text.split())[:PLOT_TEXT_MAX].replace("$", r"\$")
+
+
+def apply_plot_labels():
+    """Aplica ao gráfico aberto os textos escolhidos pelo utilizador e limpa-os (valem só para um gráfico)."""
+    if any(plot_custom.values()) and plt.get_fignums():
+        axes = plt.gcf().axes[0]
+        if plot_custom["title"]:
+            axes.set_title(plot_custom["title"])
+        if plot_custom["xlabel"]:
+            axes.set_xlabel(plot_custom["xlabel"])
+        if plot_custom["ylabel"]:
+            axes.set_ylabel(plot_custom["ylabel"])
+    for key in plot_custom:
+        plot_custom[key] = ""
+
+
+def set_plot_labels():
+    header("TÍTULO E RÓTULOS DO PRÓXIMO GRÁFICO")
+    print(f"{UI_INDENT_1}Enter = manter o texto automático. Vale só para o próximo gráfico.\n")
+    for key, label in _PLOT_CUSTOM_NAMES.items():
+        plot_custom[key] = clean_plot_text(input(f"{UI_INDENT_1}{label}: "))
+    print(f"\n{UI_INDENT_1}Guardado." if any(plot_custom.values()) else f"\n{UI_INDENT_1}Os próximos gráficos usam os textos automáticos.")
+    pause()
+
+
 def finish_plot(name):
     """Termina um gráfico: mostra-o numa janela ou, com a gravação em PNG activa, grava-o e fecha-o."""
+    apply_plot_labels()
     if plot_png_dir is None:
         plt.show()
         return
@@ -3171,10 +3324,12 @@ def menu_charts():
         print(f"{UI_INDENT_1}[9] Linhas com média móvel")
         print(f"{UI_INDENT_1}[A] Tendência polinomial")
         print(f"{UI_INDENT_1}[B] Gravar gráficos em PNG: {'ligado (' + plot_png_dir + ')' if plot_png_dir else 'desligado'}")
+        pending = [f"{_PLOT_CUSTOM_NAMES[k].lower()}: {v}" for k, v in plot_custom.items() if v]
+        print(f"{UI_INDENT_1}[C] Título e rótulos do próximo gráfico" + (f" ({'; '.join(pending)})" if pending else ""))
         print(f"{UI_INDENT_1}[0] Voltar")
         print("-" * WIDTH)
 
-        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "0"})
+        choice = ask_option({"1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "0"})
         if choice == "0":
             break
         elif choice == "1":
@@ -3199,6 +3354,8 @@ def menu_charts():
             plot_polynomial_trend()
         elif choice == "B":
             toggle_png_export()
+        elif choice == "C":
+            set_plot_labels()
 
 
 # Regras de validação por coluna: mínimo/máximo (números e datas), valores permitidos e obrigatório
@@ -3849,6 +4006,8 @@ FORMULA_HELP = (
     "Colunas: escreva o nome (Salario) ou entre parênteses rectos se tiver espaços ([Preço unitário])",
     "Funções: abs round(x, casas) sqrt log exp floor ceil min(a,b) max(a,b) se(condição, então, senão)",
     "Datas:   year(d) month(d) day(d) days(d1, d2)   Exemplos: Preco * Qtd   se(Idade >= 18, 1, 0)   round(Salario / 12, 2)",
+    "Células: B2 = coluna B (letras abaixo), linha 2 (o nº da coluna # do ecrã); $B$2 é igual. Intervalos: B2:B9",
+    "Totais:  soma(B2:B9)  media(Salario)  contar(Nome)  min(B2:B9)  max(Salario)   Exemplo: Salario / soma(Salario) * 100",
 )
 
 
@@ -3861,6 +4020,7 @@ def add_formula_column():
     print()
     for line in FORMULA_HELP:
         print(f"{UI_INDENT_1}{line}")
+    print(f"{UI_INDENT_1}Letras:   " + "  ".join(f"{column_letter(i)}={c}" for i, c in enumerate(table.columns)))
     if meta["formulas"]:
         print(f"\n{UI_INDENT_1}Fórmulas existentes:")
         for col, expression in meta["formulas"].items():
@@ -3878,6 +4038,7 @@ def add_formula_column():
         if not expression or expression.lower() == "sair":
             return
         try:
+            expression = canonical_formula(expression, list(table.columns))
             series, col_type = evaluate_formula(expression, table, col_types)
             break
         except FormulaError as e:
@@ -3888,6 +4049,7 @@ def add_formula_column():
     meta["formulas"][name] = expression
     commit()
     print(f"\n{UI_INDENT_1}Coluna '{name}' ({TYPE_NAME.get(col_type, 'texto')}) calculada. É recalculada sempre que a folha muda.")
+    print(f"{UI_INDENT_1}Guardada como: {expression}")
     pause()
 
 

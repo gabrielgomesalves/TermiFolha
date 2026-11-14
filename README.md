@@ -2,7 +2,7 @@
 
 Folha de cálculo em linha de comando, em Python, num único ficheiro (`TermiFolha.py`). Cria, edita, filtra e analisa tabelas com colunas tipadas (texto, inteiro, decimal, data), com **várias folhas**, **colunas calculadas por fórmula**, regras de validação, tabelas dinâmicas e gráficos. Importa e exporta Excel, CSV e JSON, e exporta Word, PDF, Markdown e HTML. O estado é gravado automaticamente entre sessões.
 
-Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.2 · Manual: [`docs/MANUAL.md`](docs/MANUAL.md)
+Autor: Gabriel Gomes Alves · Licença: MIT · Versão 1.3 · Manual: [`docs/MANUAL.md`](docs/MANUAL.md)
 
 ## Instalação
 
@@ -69,9 +69,10 @@ O código está em inglês (funções, variáveis, constantes); mensagens, comen
 
 ## Limitações conhecidas
 
-- O manual em PDF da v1.0 está desactualizado; o de referência é `docs/MANUAL.md`.
+- O manual em PDF é gerado de `docs/MANUAL.md` (`python docs/gerar_manual_pdf.py`); em caso de dúvida vale o `.md`.
 - A tabela do PDF trunca as células a 14 caracteres.
 - Com o `fpdf` antigo, caracteres fora de Latin-1 aparecem como `?` no PDF.
 - O histórico de desfazer guarda o livro inteiro: 20 passos por omissão (configurável até 100); cada passo usa memória.
-- As fórmulas são por coluna (vectoriais); não há referências a células (`A1`).
+- As referências a células (`B2`) são sempre fixas: não há referências relativas que acompanham a linha, nem entre folhas.
+- O título e os rótulos dos gráficos valem só para o gráfico seguinte e não ficam gravados.
 - Os nomes das funções de teste estão em português (descrevem o comportamento esperado).

@@ -1,6 +1,6 @@
-# Manual do Utilizador — TermiFolha v1.2
+# Manual do Utilizador — TermiFolha v1.3
 
-Este manual substitui o PDF da v1.0, que tinha divergências face ao programa (ver `CHANGELOG.md`). Descreve o comportamento real da versão 1.2.
+Este manual descreve o comportamento real da versão 1.3. A versão em PDF é gerada a partir deste ficheiro (`python docs/gerar_manual_pdf.py`).
 
 ## 1. Instalação e arranque
 
@@ -39,7 +39,7 @@ Ao arrancar, o estado da sessão anterior (todas as folhas) é restaurado a part
 | 4 | Análise básica: ordenar, filtrar, início/fim, amostra, páginas, totais |
 | 5 | Estatísticas (9 métodos) |
 | 6 | Análise avançada: info, agrupar, duplicados, dados em falta, tabela dinâmica, outliers |
-| 7 | Gráficos (10 tipos; opção de gravar em PNG) |
+| 7 | Gráficos (10 tipos; gravar em PNG; título e rótulos) |
 | 8 | Folhas: separadores, juntar, empilhar |
 | 9 | Definições |
 | S | Sobre |
@@ -125,6 +125,8 @@ A extensão é acrescentada automaticamente se faltar. Pode indicar um caminho c
 
 Cada gráfico abre numa janela do matplotlib; feche-a para voltar ao menu. Com **[B] Gravar gráficos em PNG** ligado, os gráficos não abrem janela: são gravados na pasta escolhida (por omissão `graficos/`) com o nome `<tipo>_<data>_<hora>.png`.
 
+Com **[C] Título e rótulos do próximo gráfico** escolhe o título e os rótulos dos eixos X e Y. Enter deixa o texto automático. Os textos valem **só para o próximo gráfico** (abre ou grava-se com eles e voltam ao automático); o menu mostra o que está pendente. O texto é limitado a 120 caracteres e o `$` é escrito tal como está (não é lido como fórmula). Nos gráficos sem eixos (circular) só o título tem efeito visível.
+
 | | Gráfico | | Gráfico |
 |---|---|---|---|
 | 1 | Barras (eixos à escolha) | 6 | Histograma com quartis |
@@ -145,10 +147,23 @@ Cada gráfico abre numa janela do matplotlib; feche-a para voltar ao menu. Com *
 | Comparações e lógica | `== != < <= > >=`, `and`, `or`, `not` |
 | Funções | `abs`, `round(x, casas)`, `sqrt`, `log`, `exp`, `floor`, `ceil`, `min(a, b)`, `max(a, b)`, `se(condição, então, senão)` |
 | Datas | `year(d)`, `month(d)`, `day(d)`, `days(d1, d2)` (diferença em dias) |
+| Células | `B2`: coluna **B** (a 2.ª) e linha **2**, como na coluna `#` do ecrã (a primeira linha é a 0). `$B$2` é igual. Também `[Salario]2` |
+| Intervalos | `B2:B9` (ou `B0:C7`, que abrange as duas colunas); só dentro de `soma`, `media`, `contar`, `min`, `max` |
+| Totais | `soma(x)`, `media(x)`, `contar(x)`, `min(x)`, `max(x)` com **um** argumento (coluna, intervalo ou expressão); `min(a, b)` e `max(a, b)` continuam a comparar linha a linha |
 
-Exemplos: `Preco * Qtd`, `round(Salario / 12, 2)`, `se(Idade >= 18, 1, 0)`, `Nome + " (" + Cidade + ")"`, `year(Admissao)`.
+Exemplos: `Preco * Qtd`, `round(Salario / 12, 2)`, `se(Idade >= 18, 1, 0)`, `Nome + " (" + Cidade + ")"`, `year(Admissao)`, `Salario / soma(Salario) * 100`, `Salario / $C$0`, `soma(C0:C7)`.
 
-- O tipo do resultado é inferido: inteiro (só com colunas inteiras, sem `/`, `sqrt`, `log`, `exp`), decimal, data ou texto. Uma comparação dá 1/0. Divisão por zero dá célula em branco.
+**Células e intervalos**
+
+- As letras seguem a ordem das colunas (`A` = 1.ª, `B` = 2.ª, … `AA` = 27.ª); o ecrã da fórmula mostra a correspondência (`A=Nome  B=Idade …`). A linha é o número da coluna `#`.
+- Uma referência é sempre a **mesma célula** em todas as linhas da coluna calculada (`Salario / $C$0` divide tudo pelo primeiro salário). Para usar o valor da própria linha, escreva o nome da coluna. Não há referências relativas que "andam" com a linha.
+- Ao gravar, as letras são trocadas pelos nomes das colunas (`B2` passa a `[Idade]2`), por isso a fórmula continua certa se as colunas mudarem de posição. O ecrã mostra "Guardada como: …".
+- Uma coluna referida por uma célula ou intervalo conta como usada: não se remove, renomeia nem converte.
+- Um intervalo abrange todas as colunas entre os extremos. Vazios são ignorados por `soma`, `media`, `min` e `max`; `contar` conta as células com valor, de qualquer tipo. `soma` e `media` não aceitam datas; `min` e `max` aceitam.
+- Uma linha que não exista (por exemplo, depois de a remover) faz a fórmula falhar com um aviso, e a coluna fica em branco.
+- Se uma coluna se chamar como uma célula (por exemplo `Q1`), o nome da coluna ganha.
+
+- O tipo do resultado é inferido: inteiro (só com colunas inteiras, sem `/`, `sqrt`, `log`, `exp`, `media`), decimal, data ou texto. Uma comparação dá 1/0. Divisão por zero dá célula em branco.
 - Uma célula em branco numa coluna usada propaga-se (o resultado fica em branco).
 - Não se pode editar uma coluna calculada, nem renomear ou remover uma coluna que seja usada por uma fórmula: converta primeiro a fórmula em valores.
 - **Segurança:** as fórmulas são interpretadas por um avaliador próprio com uma lista fechada de operações e funções; nunca são executadas como código Python. Uma fórmula adulterada num ficheiro de estado ou de projecto falha sem fazer nada.
@@ -200,7 +215,7 @@ Cada alteração guarda um ponto de recuperação do **livro inteiro** (todas as
 | Erro ao importar Excel | Confirme a extensão `.xlsx`, que `openpyxl` está instalado e que o ficheiro não está aberto noutra aplicação. |
 | Erro ao exportar | Confirme as permissões de escrita e que o ficheiro de destino não está aberto. Detalhes em `.termifolha.log`. |
 | O programa avisa que o estado está corrompido | O ficheiro foi preservado como `.termifolha_estado.json.corrompido`; a sessão começa vazia. |
-| Estado de uma versão antiga | Um `.termifolha_estado.pkl` (v1.0) é migrado automaticamente no primeiro arranque (cópia em `.pkl.migrado`). O estado da v1.1 é lido e convertido. **Depois de gravar com a v1.2, a v1.1 já não o consegue ler** (preserva-o como `.corrompido`). |
+| Estado de uma versão antiga | Um `.termifolha_estado.pkl` (v1.0) é migrado automaticamente no primeiro arranque (cópia em `.pkl.migrado`). O estado da v1.1 é lido e convertido. **Depois de gravar com a v1.2 ou posterior, a v1.1 já não o consegue ler** (preserva-o como `.corrompido`). |
 | "A fórmula de 'X' falhou" | A fórmula usa algo que já não existe (por exemplo, o ficheiro foi editado à mão). A coluna fica em branco; converta-a em valores ou recrie-a. |
 | O gráfico não aparece | A janela pode ter aberto por trás de outras; ou a gravação em PNG está ligada (menu Gráficos, [B]). |
 | Valores cortados no ecrã | Cada coluna é truncada a 15 caracteres no ecrã; os dados estão íntegros. |
