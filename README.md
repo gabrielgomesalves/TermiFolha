@@ -6,6 +6,7 @@
 
 Tabelas tipadas, várias folhas, fórmulas, análise estatística, gráficos e exportação para Excel, Word, PDF e mais — num único ficheiro Python.
 
+[![CI](https://github.com/gabrielgomesalves/TermiFolha/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielgomesalves/TermiFolha/actions/workflows/ci.yml)
 ![Versão](https://img.shields.io/badge/versão-1.3-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Licença](https://img.shields.io/badge/licença-MIT-green)
@@ -44,7 +45,7 @@ Tabelas tipadas, várias folhas, fórmulas, análise estatística, gráficos e e
 Requer **Python 3.12 ou superior**.
 
 ```
-git clone <endereço-do-repositório>
+git clone https://github.com/gabrielgomesalves/TermiFolha.git
 cd TermiFolha
 pip install -r requirements.txt
 python TermiFolha.py
