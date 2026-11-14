@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.4.0]
+
+### Adicionado
+- **Referências relativas nas fórmulas** que acompanham a linha: `anterior(x)`, `seguinte(x)` e `desloca(x, n)` (por exemplo `Salario - anterior(Salario)`), para números, texto e datas.
+- **Referências a outras folhas** nas fórmulas: `Vendas!B2`, `'Vendas 2025'!B2:B9`, `Vendas![Preço]3` e, dentro de `soma`/`media`/`contar`/`min`/`max`, a coluna inteira `Vendas![Preço]`.
+- **Recálculo de todo o livro** por ordem de dependências: uma coluna calculada de outra folha é calculada antes de quem a usa; ciclos são detectados e avisados («referência circular»).
+- **Título e rótulos dos gráficos guardados** com a folha (estado, projectos e desfazer), por tipo de gráfico ou para todos; `-` apaga um texto e `[L]` apaga todos.
+- **Importar de URL** (`[F]` no menu Folha): `.xlsx`, `.csv` e `.json` em `http://` e `https://`, com limite de 50 MB e de 30 s; as chaves no endereço nunca são mostradas nem registadas.
+- **Importar de bases de dados** (`[G]`): tabela, todas as tabelas (uma folha cada) ou consulta `SELECT` de um ficheiro SQLite; outras bases (PostgreSQL, MySQL, …) com o SQLAlchemy opcional (`requirements-opcional.txt`). Só leitura, com limite de 1 000 000 de linhas.
+- Linha de comandos: `--importar` aceita endereços `http(s)://`; novos `--base-dados`, `--tabela` e `--consulta`.
+- 113 novos testes (611 no total), incluindo um servidor HTTP local e bases SQLite criadas na hora.
+
+### Alterado
+- O título e os rótulos dos gráficos já **não se gastam** ao primeiro gráfico: valem até os alterar. O menu `[C]` passou a escolher o gráfico.
+- As colunas calculadas de **todas** as folhas são recalculadas a cada alteração (antes só as da folha activa).
+- Uma folha usada pela fórmula de outra não se elimina; uma coluna usada por fórmulas de outra folha não se remove, renomeia nem converte; renomear uma folha actualiza as fórmulas que a referem.
+- Os nomes de folha não podem ter aspas simples e duplas ao mesmo tempo.
+- O estado ganha a chave `graficos` por folha (o formato continua na versão 2; estados antigos abrem sem ela). Versão 1.4.
+
+### Interno
+- `evaluate_formula`, `canonical_formula` e `_parse_formula` recebem opcionalmente o livro (`book`); `recalculate_formulas` trabalha sobre o livro inteiro.
+
 ## [1.3.0]
 
 ### Adicionado

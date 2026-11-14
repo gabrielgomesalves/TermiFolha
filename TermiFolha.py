@@ -13,7 +13,7 @@
 # TermiFolha — Folha de Cálculo CLI
 #
 # Autor: Gabriel Gomes Alves
-# Versão: 1.3
+# Versão: 1.4
 #
 # Descrição: TermiFolha é uma aplicação de folha de cálculo em linha de comando, permite criar, editar, filtrar e analisar dados de uma folha de cálculo (DataFrame) de forma simples e eficiente.
 #
@@ -79,7 +79,7 @@ from fpdf import FPDF
 # Constantes da aplicação (nome, versão, ficheiros, dimensões UI)
 APP_NAME          = "TermiFolha"
 APP_TITLE        = "TermiFolha  —  Folha de Cálculo CLI"
-APP_VERSION        = "1.3"
+APP_VERSION        = "1.4"
 APP_AUTHOR         = "Gabriel Gomes Alves"
 _PROGRAM_DIR   = os.path.dirname(os.path.abspath(__file__))
 STATE_FILE   = os.path.join(_PROGRAM_DIR, ".termifolha_estado.json")

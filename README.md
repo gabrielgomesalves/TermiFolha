@@ -7,12 +7,12 @@
 Tabelas tipadas, várias folhas, fórmulas, análise estatística, gráficos e exportação para Excel, Word, PDF e mais — num único ficheiro Python.
 
 [![CI](https://github.com/gabrielgomesalves/TermiFolha/actions/workflows/ci.yml/badge.svg)](https://github.com/gabrielgomesalves/TermiFolha/actions/workflows/ci.yml)
-![Versão](https://img.shields.io/badge/versão-1.3-blue)
+![Versão](https://img.shields.io/badge/versão-1.4-blue)
 ![Python](https://img.shields.io/badge/python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![Licença](https://img.shields.io/badge/licença-MIT-green)
-![Testes](https://img.shields.io/badge/testes-498-brightgreen)
+![Testes](https://img.shields.io/badge/testes-611-brightgreen)
 
-[Manual](docs/MANUAL.md) · [Manual em PDF](<Manual do Utilizador — TermiFolha v1.3.pdf>) · [Changelog](CHANGELOG.md) · [Arquitectura](docs/ARQUITECTURA.md) · [Roadmap](docs/ROADMAP.md)
+[Manual](docs/MANUAL.md) · [Manual em PDF](<Manual do Utilizador — TermiFolha v1.4.pdf>) · [Changelog](CHANGELOG.md) · [Arquitectura](docs/ARQUITECTURA.md) · [Roadmap](docs/ROADMAP.md)
 
 </div>
 
@@ -32,12 +32,12 @@ Tabelas tipadas, várias folhas, fórmulas, análise estatística, gráficos e e
 | | |
 |---|---|
 | **Folhas e livros** | Várias folhas por livro; juntar (*join*) e empilhar; ficheiros de projecto `.termifolha` |
-| **Fórmulas** | `Preco * Qtd`, `se(Idade >= 18, 1, 0)`, `Salario / soma(Salario) * 100`, referências `B2` e intervalos `B2:B9` |
+| **Fórmulas** | `Preco * Qtd`, `se(Idade >= 18, 1, 0)`, `Salario / soma(Salario) * 100`, referências `B2` e `B2:B9`, linhas vizinhas (`Total - anterior(Total)`) e outras folhas (`Vendas![Preço]`) |
 | **Edição** | Linhas e colunas, procurar e substituir com pré-visualização, conversão de tipos, colar dados do Excel |
 | **Limpeza** | Valores em falta, duplicados, valores anómalos (IQR e desvio-padrão), normalização, faixas |
 | **Análise** | Filtros, ordenação, agrupamento, tabelas dinâmicas, correlação (Pearson e Spearman), estatísticas |
-| **Gráficos** | 10 tipos, com título e rótulos à escolha, no ecrã ou gravados em PNG |
-| **Importar** | Excel (todas as folhas), CSV (detecta separador e codificação), JSON |
+| **Gráficos** | 10 tipos, no ecrã ou gravados em PNG; título e rótulos à escolha ficam guardados com a folha |
+| **Importar** | Excel (todas as folhas), CSV (detecta separador e codificação), JSON, **endereços http(s)** e **bases de dados** (SQLite; PostgreSQL, MySQL, … com o SQLAlchemy) |
 | **Exportar** | Excel, CSV, JSON, Markdown, HTML, Word e PDF |
 
 ## Começar
@@ -50,6 +50,8 @@ cd TermiFolha
 pip install -r requirements.txt
 python TermiFolha.py
 ```
+
+Para importar de bases de dados que não sejam SQLite (PostgreSQL, MySQL, …) instale também `pip install -r requirements-opcional.txt` e o driver da sua base (`psycopg`, `pymysql`, …).
 
 ### Primeiros passos
 
@@ -67,9 +69,11 @@ Sem menus, sem perguntas e sem tocar no estado da sessão:
 ```
 python TermiFolha.py --importar vendas.csv --exportar vendas.xlsx --exportar relatorio.html
 python TermiFolha.py --projecto projecto.termifolha --exportar livro.xlsx --todas-as-folhas
+python TermiFolha.py --importar https://exemplo.pt/dados.csv --exportar dados.xlsx
+python TermiFolha.py --base-dados loja.db --consulta "SELECT nome, saldo FROM clientes" --exportar saldos.csv
 ```
 
-Formatos de exportação: `.xlsx .csv .json .md .html .docx .pdf`. O código de saída é `0` (sucesso), `1` (erro) ou `2` (formato não suportado). Todas as opções estão na secção 12 do [manual](docs/MANUAL.md).
+Formatos de exportação: `.xlsx .csv .json .md .html .docx .pdf`. O código de saída é `0` (sucesso), `1` (erro) ou `2` (formato ou argumentos inválidos). Todas as opções estão na secção 12 do [manual](docs/MANUAL.md).
 
 ## Ficheiros criados
 
@@ -86,7 +90,7 @@ Quem vem da v1.0 não perde nada: o estado antigo (`.termifolha_estado.pkl`) é 
 
 | Documento | Para quê |
 |---|---|
-| [Manual do Utilizador](docs/MANUAL.md) | Todos os menus, fórmulas e opções (também em [PDF](<Manual do Utilizador — TermiFolha v1.3.pdf>)) |
+| [Manual do Utilizador](docs/MANUAL.md) | Todos os menus, fórmulas e opções (também em [PDF](<Manual do Utilizador — TermiFolha v1.4.pdf>)) |
 | [Changelog](CHANGELOG.md) | O que mudou em cada versão |
 | [Arquitectura](docs/ARQUITECTURA.md) | Como o código está organizado por dentro |
 | [Roadmap](docs/ROADMAP.md) | O que falta fazer |
@@ -122,8 +126,9 @@ O código está em inglês (funções, variáveis, constantes); as mensagens, os
 - A tabela do PDF trunca as células a 14 caracteres.
 - Com o `fpdf` antigo, os caracteres fora de Latin-1 aparecem como `?` no PDF.
 - O histórico de desfazer guarda o livro inteiro: 20 passos por omissão (configurável até 100), e cada passo usa memória.
-- As referências a células (`B2`) são sempre fixas: não acompanham a linha e não funcionam entre folhas.
-- O título e os rótulos dos gráficos valem só para o gráfico seguinte e não ficam gravados.
+- As referências a células (`B2`) são sempre fixas; para acompanhar a linha usam-se `anterior`, `seguinte` e `desloca`.
+- Na importação de bases de dados só se lê (uma consulta `SELECT` de cada vez) e o limite é 1 000 000 de linhas; nos servidores convém usar uma conta só de leitura.
+- A importação de URLs não tem autenticação nem cabeçalhos próprios (só `http://` e `https://`, até 50 MB).
 - O manual em PDF é gerado de `docs/MANUAL.md` (`python docs/gerar_manual_pdf.py`); em caso de dúvida vale o `.md`.
 
 ## Licença e autor
